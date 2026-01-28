@@ -8,6 +8,7 @@ import numpy as np
 def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--video", required=True, help="video file name, e.g. tennis.mp4")
+    ap.add_argument("--output", help="save annotated video to this path (e.g. output.mp4)")
     ap.add_argument("--buffer", type=int, default=64, help="trail length")
     ap.add_argument("--roi-top", type=float, default=0.30, help="ignore top portion of frame (0-1)")
     ap.add_argument("--hmin", type=int, default=20, help="HSV lower H (0-179)")
@@ -23,11 +24,17 @@ def parse_args():
     ap.add_argument("--motion-dilate", type=int, default=2, help="motion mask dilation iterations")
     ap.add_argument("--use-motion", action="store_true", help="AND motion mask with HSV mask")
     ap.add_argument("--min-motion-ratio", type=float, default=0.05, help="min motion overlap ratio (0-1)")
+    ap.add_argument("--use-kalman", action="store_true", help="use Kalman prediction to gate tracking")
+    ap.add_argument("--kalman-max-distance", type=float, default=120, help="max distance to predicted point")
+    ap.add_argument("--kalman-miss-reset", type=int, default=12, help="reset Kalman after N misses")
     ap.add_argument("--min-radius", type=float, default=1, help="min enclosing-circle radius")
     ap.add_argument("--max-radius", type=float, default=25, help="max enclosing-circle radius")
     ap.add_argument("--min-area", type=float, default=5, help="min contour area")
     ap.add_argument("--max-area", type=float, default=2000, help="max contour area")
     ap.add_argument("--min-circularity", type=float, default=0.2, help="min circularity 0-1")
+    ap.add_argument("--min-fill-ratio", type=float, default=0.45, help="min area / circle area ratio (0-1)")
+    ap.add_argument("--min-extent", type=float, default=0.3, help="min area / bbox area ratio (0-1)")
+    ap.add_argument("--max-aspect-ratio", type=float, default=2.0, help="max bbox aspect ratio (w/h or h/w)")
     ap.add_argument("--max-jump", type=int, default=250, help="max pixel jump between frames")
     ap.add_argument("--lost-reset", type=int, default=10, help="reset after N lost frames")
     ap.add_argument("--tune", action="store_true", help="enable trackbar tuning UI")
@@ -123,6 +130,8 @@ def select_ball_contour(
     motion,
     motion_valid,
     min_motion_ratio,
+    pred_point,
+    max_pred_dist,
     y0,
     last_center,
     min_radius,
@@ -130,11 +139,15 @@ def select_ball_contour(
     min_area,
     max_area,
     min_circ,
+    min_fill_ratio,
+    min_extent,
+    max_aspect_ratio,
     max_jump,
 ):
     cnts, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     best = None
     best_radius = 0.0
+    best_dist = None
 
     for c in cnts:
         ((x, y), radius) = cv2.minEnclosingCircle(c)
@@ -144,6 +157,21 @@ def select_ball_contour(
         area = cv2.contourArea(c)
         if area < min_area or area > max_area:
             continue
+
+        if radius > 0:
+            circle_area = np.pi * radius * radius
+            fill_ratio = area / float(circle_area)
+            if fill_ratio < min_fill_ratio:
+                continue
+
+        x0, y0_rect, w, h = cv2.boundingRect(c)
+        if w > 0 and h > 0:
+            extent = area / float(w * h)
+            if extent < min_extent:
+                continue
+            aspect_ratio = max(w / float(h), h / float(w))
+            if aspect_ratio > max_aspect_ratio:
+                continue
 
         circ = contour_circularity(c)
         if circ < min_circ:
@@ -168,13 +196,26 @@ def select_ball_contour(
         cy = int(m["m01"] / m["m00"])
         cand_center = (cx, cy + y0)
 
-        if last_center is not None:
+        if pred_point is not None and max_pred_dist is not None:
+            dxp = cand_center[0] - pred_point[0]
+            dyp = cand_center[1] - pred_point[1]
+            dist2 = dxp * dxp + dyp * dyp
+            if dist2 > max_pred_dist * max_pred_dist:
+                continue
+        elif last_center is not None:
             dx = cand_center[0] - last_center[0]
             dy = cand_center[1] - last_center[1]
             if dx * dx + dy * dy > max_jump * max_jump:
                 continue
 
-        if radius > best_radius:
+        if pred_point is not None:
+            dxp = cand_center[0] - pred_point[0]
+            dyp = cand_center[1] - pred_point[1]
+            dist2 = dxp * dxp + dyp * dyp
+            if best is None or dist2 < best_dist:
+                best = (x, y, radius, cand_center)
+                best_dist = dist2
+        elif radius > best_radius:
             best_radius = radius
             best = (x, y, radius, cand_center)
 
@@ -223,6 +264,26 @@ def main():
     lost_frames = 0
     prev_gray = None
     frame_i = 0
+    kalman = None
+    kalman_misses = 0
+
+    if args.use_kalman:
+        kalman = cv2.KalmanFilter(4, 2)
+        kalman.transitionMatrix = np.array(
+            [[1, 0, 1, 0],
+             [0, 1, 0, 1],
+             [0, 0, 1, 0],
+             [0, 0, 0, 1]],
+            dtype=np.float32,
+        )
+        kalman.measurementMatrix = np.array(
+            [[1, 0, 0, 0],
+             [0, 1, 0, 0]],
+            dtype=np.float32,
+        )
+        kalman.processNoiseCov = np.eye(4, dtype=np.float32) * 1e-2
+        kalman.measurementNoiseCov = np.eye(2, dtype=np.float32) * 1e-1
+        kalman.errorCovPost = np.eye(4, dtype=np.float32)
 
     lower = np.array([args.hmin, args.smin, args.vmin], dtype=np.uint8)
     upper = np.array([args.hmax, args.smax, args.vmax], dtype=np.uint8)
@@ -237,8 +298,13 @@ def main():
     min_area = args.min_area
     max_area = args.max_area
     min_circ = args.min_circularity
+    min_fill_ratio = args.min_fill_ratio
+    min_extent = args.min_extent
+    max_aspect_ratio = args.max_aspect_ratio
     max_jump = args.max_jump
     min_motion_ratio = args.min_motion_ratio
+
+    writer = None
 
     while True:
         ok, frame = cap.read()
@@ -263,11 +329,18 @@ def main():
         else:
             final_mask = hsv
 
+        pred_point = None
+        if kalman is not None:
+            prediction = kalman.predict()
+            pred_point = (int(prediction[0, 0]), int(prediction[1, 0]))
+
         best = select_ball_contour(
             final_mask,
             motion,
             motion_valid,
             min_motion_ratio,
+            pred_point,
+            args.kalman_max_distance if kalman is not None else None,
             y0,
             last_center,
             min_radius,
@@ -275,6 +348,9 @@ def main():
             min_area,
             max_area,
             min_circ,
+            min_fill_ratio,
+            min_extent,
+            max_aspect_ratio,
             max_jump,
         )
 
@@ -285,10 +361,23 @@ def main():
             cv2.circle(frame, center, 4, (0, 0, 255), -1)
             last_center = center
             lost_frames = 0
+            if kalman is not None:
+                measurement = np.array([[np.float32(center[0])], [np.float32(center[1])]])
+                kalman.correct(measurement)
+                kalman_misses = 0
         else:
             lost_frames += 1
             if lost_frames > args.lost_reset:
                 last_center = None
+            if kalman is not None:
+                kalman_misses += 1
+                if kalman_misses > args.kalman_miss_reset:
+                    kalman = None
+
+        if pred_point is not None:
+            cv2.circle(frame, pred_point, 4, (0, 255, 255), -1)
+            if center is None:
+                center = pred_point
 
         pts.appendleft(center)
 
@@ -306,12 +395,28 @@ def main():
         show_window("final_mask", final_mask, args.display_max_width, args.display_max_height)
         show_window("Ball Tracker", frame, args.display_max_width, args.display_max_height)
 
+        if args.output and writer is None:
+            h, w = frame.shape[:2]
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            if not fps or fps <= 1:
+                fps = 30.0
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            writer = cv2.VideoWriter(args.output, fourcc, fps, (w, h))
+            if not writer.isOpened():
+                print("Could not open video writer:", args.output)
+                writer = None
+
+        if writer is not None:
+            writer.write(frame)
+
         key = cv2.waitKey(1) & 0xFF
         if key == ord("q"):
             break
 
     print("Video done. Press any key in the Ball Tracker window to close.")
     cv2.waitKey(0)
+    if writer is not None:
+        writer.release()
     cap.release()
     cv2.destroyAllWindows()
 
