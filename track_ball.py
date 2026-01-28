@@ -32,9 +32,11 @@ def parse_args():
     ap.add_argument("--min-area", type=float, default=5, help="min contour area")
     ap.add_argument("--max-area", type=float, default=2000, help="max contour area")
     ap.add_argument("--min-circularity", type=float, default=0.2, help="min circularity 0-1")
-    ap.add_argument("--min-fill-ratio", type=float, default=0.45, help="min area / circle area ratio (0-1)")
-    ap.add_argument("--min-extent", type=float, default=0.3, help="min area / bbox area ratio (0-1)")
-    ap.add_argument("--max-aspect-ratio", type=float, default=2.0, help="max bbox aspect ratio (w/h or h/w)")
+    ap.add_argument("--min-fill-ratio", type=float, default=0.55, help="min area / circle area ratio (0-1)")
+    ap.add_argument("--min-extent", type=float, default=0.4, help="min area / bbox area ratio (0-1)")
+    ap.add_argument("--max-aspect-ratio", type=float, default=1.6, help="max bbox aspect ratio (w/h or h/w)")
+    ap.add_argument("--min-solidity", type=float, default=0.85, help="min contour solidity (0-1)")
+    ap.add_argument("--min-ellipse-ratio", type=float, default=0.6, help="min ellipse axis ratio (0-1)")
     ap.add_argument("--max-jump", type=int, default=250, help="max pixel jump between frames")
     ap.add_argument("--lost-reset", type=int, default=10, help="reset after N lost frames")
     ap.add_argument("--tune", action="store_true", help="enable trackbar tuning UI")
@@ -142,6 +144,8 @@ def select_ball_contour(
     min_fill_ratio,
     min_extent,
     max_aspect_ratio,
+    min_solidity,
+    min_ellipse_ratio,
     max_jump,
 ):
     cnts, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -176,6 +180,20 @@ def select_ball_contour(
         circ = contour_circularity(c)
         if circ < min_circ:
             continue
+
+        hull = cv2.convexHull(c)
+        hull_area = cv2.contourArea(hull)
+        if hull_area > 0:
+            solidity = area / float(hull_area)
+            if solidity < min_solidity:
+                continue
+
+        if len(c) >= 5:
+            (_, _), (ma, ma_minor), _ = cv2.fitEllipse(c)
+            if ma_minor > 0:
+                ellipse_ratio = min(ma, ma_minor) / max(ma, ma_minor)
+                if ellipse_ratio < min_ellipse_ratio:
+                    continue
 
         if motion_valid and min_motion_ratio > 0:
             motion_mask = np.zeros_like(mask)
@@ -301,6 +319,8 @@ def main():
     min_fill_ratio = args.min_fill_ratio
     min_extent = args.min_extent
     max_aspect_ratio = args.max_aspect_ratio
+    min_solidity = args.min_solidity
+    min_ellipse_ratio = args.min_ellipse_ratio
     max_jump = args.max_jump
     min_motion_ratio = args.min_motion_ratio
 
@@ -351,6 +371,8 @@ def main():
             min_fill_ratio,
             min_extent,
             max_aspect_ratio,
+            min_solidity,
+            min_ellipse_ratio,
             max_jump,
         )
 
