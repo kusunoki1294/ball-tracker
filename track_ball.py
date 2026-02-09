@@ -1,8 +1,186 @@
 import argparse
 from collections import deque
+import subprocess
 
 import cv2
 import numpy as np
+
+
+class FFmpegCapture:
+    def __init__(self, process, width, height, fps):
+        self._process = process
+        self._width = width
+        self._height = height
+        self._fps = fps
+        self._opened = process is not None
+
+    def isOpened(self):
+        return self._opened
+
+    def read(self):
+        if not self._opened:
+            return False, None
+        frame_size = self._width * self._height * 3
+        data = self._process.stdout.read(frame_size)
+        if data is None or len(data) < frame_size:
+            return False, None
+        frame = np.frombuffer(data, dtype=np.uint8).reshape((self._height, self._width, 3)).copy()
+        return True, frame
+
+    def get(self, prop_id):
+        if prop_id == cv2.CAP_PROP_FPS and self._fps:
+            return float(self._fps)
+        return 0.0
+
+    def release(self):
+        if not self._opened:
+            return
+        try:
+            self._process.terminate()
+        except Exception:
+            pass
+        self._opened = False
+
+
+class FFmpegWriter:
+    def __init__(self, process):
+        self._process = process
+        self._opened = process is not None
+
+    def isOpened(self):
+        return self._opened
+
+    def write(self, frame):
+        if not self._opened or self._process.stdin is None:
+            return
+        try:
+            self._process.stdin.write(np.ascontiguousarray(frame).tobytes())
+        except BrokenPipeError:
+            self._opened = False
+
+    def release(self):
+        if not self._opened:
+            return
+        try:
+            if self._process.stdin is not None:
+                self._process.stdin.close()
+            self._process.wait()
+        finally:
+            self._opened = False
+
+
+def open_video(path):
+    cap = cv2.VideoCapture(path)
+    if cap.isOpened():
+        return cap
+    ffmpeg_cap = open_video_with_ffmpeg(path)
+    if ffmpeg_cap is not None and ffmpeg_cap.isOpened():
+        return ffmpeg_cap
+    return cap
+
+
+def open_writer_with_ffmpeg(path, width, height, fps):
+    try:
+        process = subprocess.Popen(
+            [
+                "ffmpeg",
+                "-loglevel",
+                "error",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "bgr24",
+                "-s",
+                f"{width}x{height}",
+                "-r",
+                f"{fps:.3f}",
+                "-i",
+                "-",
+                "-an",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                path,
+            ],
+            stdin=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        return None
+
+    if process.stdin is None:
+        return None
+    return FFmpegWriter(process)
+
+
+def open_video_with_ffmpeg(path):
+    try:
+        probe = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height,r_frame_rate",
+                "-of",
+                "default=nw=1:nk=1",
+                path,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        return None
+
+    if probe.returncode != 0:
+        return None
+
+    lines = [line.strip() for line in probe.stdout.splitlines() if line.strip()]
+    if len(lines) < 3:
+        return None
+
+    try:
+        width = int(lines[0])
+        height = int(lines[1])
+        fps = parse_fps(lines[2])
+    except ValueError:
+        return None
+
+    try:
+        process = subprocess.Popen(
+            [
+                "ffmpeg",
+                "-loglevel",
+                "error",
+                "-i",
+                path,
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "bgr24",
+                "-",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        return None
+
+    if process.stdout is None:
+        return None
+    return FFmpegCapture(process, width, height, fps)
+
+
+def parse_fps(rate):
+    if "/" in rate:
+        num, den = rate.split("/", 1)
+        den_val = float(den)
+        return float(num) / den_val if den_val else 0.0
+    return float(rate)
 
 
 def parse_args():
@@ -10,7 +188,7 @@ def parse_args():
     ap.add_argument("--video", required=True, help="video file name, e.g. tennis.mp4")
     ap.add_argument("--output", help="save annotated video to this path (e.g. output.mp4)")
     ap.add_argument("--buffer", type=int, default=64, help="trail length")
-    ap.add_argument("--roi-top", type=float, default=0.30, help="ignore top portion of frame (0-1)")
+    ap.add_argument("--roi-top", type=float, default=0.25, help="ignore top portion of frame (0-1)")
     ap.add_argument("--hmin", type=int, default=20, help="HSV lower H (0-179)")
     ap.add_argument("--smin", type=int, default=50, help="HSV lower S (0-255)")
     ap.add_argument("--vmin", type=int, default=50, help="HSV lower V (0-255)")
@@ -40,6 +218,7 @@ def parse_args():
     ap.add_argument("--max-jump", type=int, default=250, help="max pixel jump between frames")
     ap.add_argument("--lost-reset", type=int, default=10, help="reset after N lost frames")
     ap.add_argument("--tune", action="store_true", help="enable trackbar tuning UI")
+    ap.add_argument("--headless", action="store_true", help="disable all OpenCV windows")
     ap.add_argument("--display-max-width", type=int, default=1280, help="max display width (0 = no limit)")
     ap.add_argument("--display-max-height", type=int, default=720, help="max display height (0 = no limit)")
     return ap.parse_args()
@@ -264,18 +443,18 @@ def show_window(name, image, max_width, max_height):
 def main():
     args = parse_args()
 
-    cap = cv2.VideoCapture(args.video)
+    cap = open_video(args.video)
     if not cap.isOpened():
         print("Could not open video:", args.video)
         return
 
-    if args.tune:
-        setup_tuning(args)
-
-    cv2.namedWindow("roi", cv2.WINDOW_NORMAL)
-    cv2.namedWindow("hsv_mask", cv2.WINDOW_NORMAL)
-    cv2.namedWindow("motion_mask", cv2.WINDOW_NORMAL)
-    cv2.namedWindow("final_mask", cv2.WINDOW_NORMAL)
+    if not args.headless:
+        if args.tune:
+            setup_tuning(args)
+        cv2.namedWindow("roi", cv2.WINDOW_NORMAL)
+        cv2.namedWindow("hsv_mask", cv2.WINDOW_NORMAL)
+        cv2.namedWindow("motion_mask", cv2.WINDOW_NORMAL)
+        cv2.namedWindow("final_mask", cv2.WINDOW_NORMAL)
 
     pts = deque(maxlen=args.buffer)
     last_center = None
@@ -325,6 +504,7 @@ def main():
     min_motion_ratio = args.min_motion_ratio
 
     writer = None
+    writer_failed = False
 
     while True:
         ok, frame = cap.read()
@@ -335,7 +515,7 @@ def main():
         if frame_i % 60 == 0:
             print("frame", frame_i)
 
-        if args.tune:
+        if args.tune and not args.headless:
             lower, upper, motion_thresh, roi_top, min_radius, max_radius, min_area, max_area, max_jump, min_circ = read_tuning()
 
         roi, y0 = compute_roi(frame, roi_top)
@@ -411,13 +591,14 @@ def main():
 
         cv2.line(frame, (0, y0), (frame.shape[1], y0), (0, 255, 255), 1)
 
-        show_window("roi", roi, args.display_max_width, args.display_max_height)
-        show_window("hsv_mask", hsv, args.display_max_width, args.display_max_height)
-        show_window("motion_mask", motion, args.display_max_width, args.display_max_height)
-        show_window("final_mask", final_mask, args.display_max_width, args.display_max_height)
-        show_window("Ball Tracker", frame, args.display_max_width, args.display_max_height)
+        if not args.headless:
+            show_window("roi", roi, args.display_max_width, args.display_max_height)
+            show_window("hsv_mask", hsv, args.display_max_width, args.display_max_height)
+            show_window("motion_mask", motion, args.display_max_width, args.display_max_height)
+            show_window("final_mask", final_mask, args.display_max_width, args.display_max_height)
+            show_window("Ball Tracker", frame, args.display_max_width, args.display_max_height)
 
-        if args.output and writer is None:
+        if args.output and writer is None and not writer_failed:
             h, w = frame.shape[:2]
             fps = cap.get(cv2.CAP_PROP_FPS)
             if not fps or fps <= 1:
@@ -425,22 +606,30 @@ def main():
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
             writer = cv2.VideoWriter(args.output, fourcc, fps, (w, h))
             if not writer.isOpened():
-                print("Could not open video writer:", args.output)
-                writer = None
+                writer = open_writer_with_ffmpeg(args.output, w, h, fps)
+                if writer is None or not writer.isOpened():
+                    print("Could not open video writer:", args.output)
+                    writer = None
+                    writer_failed = True
 
         if writer is not None:
             writer.write(frame)
 
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord("q"):
-            break
+        if not args.headless:
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
+                break
 
-    print("Video done. Press any key in the Ball Tracker window to close.")
-    cv2.waitKey(0)
+    if args.headless:
+        print("Video done.")
+    else:
+        print("Video done. Press any key in the Ball Tracker window to close.")
+        cv2.waitKey(0)
     if writer is not None:
         writer.release()
     cap.release()
-    cv2.destroyAllWindows()
+    if not args.headless:
+        cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
