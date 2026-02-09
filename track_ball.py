@@ -1,6 +1,9 @@
 import argparse
 from collections import deque
 import subprocess
+import sys
+import threading
+from collections import deque
 
 import cv2
 import numpy as np
@@ -86,6 +89,7 @@ def open_writer_with_ffmpeg(path, width, height, fps):
                 "ffmpeg",
                 "-loglevel",
                 "error",
+                "-y",
                 "-f",
                 "rawvideo",
                 "-pix_fmt",
@@ -217,7 +221,10 @@ def parse_args():
     ap.add_argument("--min-ellipse-ratio", type=float, default=0.6, help="min ellipse axis ratio (0-1)")
     ap.add_argument("--max-jump", type=int, default=250, help="max pixel jump between frames")
     ap.add_argument("--lost-reset", type=int, default=10, help="reset after N lost frames")
+    ap.add_argument("--ignore-left", type=float, default=0.0, help="ignore left portion of frame (0-1)")
     ap.add_argument("--tune", action="store_true", help="enable trackbar tuning UI")
+    ap.add_argument("--tune-keyboard", action="store_true", help="tune HSV via keyboard in the main window")
+    ap.add_argument("--tune-stdin", action="store_true", help="tune HSV by typing values in the terminal")
     ap.add_argument("--headless", action="store_true", help="disable all OpenCV windows")
     ap.add_argument("--display-max-width", type=int, default=1280, help="max display width (0 = no limit)")
     ap.add_argument("--display-max-height", type=int, default=720, help="max display height (0 = no limit)")
@@ -261,6 +268,99 @@ def read_tuning():
     lower = np.array([min(hmin, hmax), min(smin, smax), min(vmin, vmax)], dtype=np.uint8)
     upper = np.array([max(hmin, hmax), max(smin, smax), max(vmin, vmax)], dtype=np.uint8)
     return lower, upper, motion_thresh, roi_top, min_radius, max_radius, min_area, max_area, max_jump, min_circ
+
+
+def clamp(value, lo, hi):
+    return max(lo, min(hi, value))
+
+
+def apply_keyboard_tuning(key, hmin, hmax, smin, smax, vmin, vmax):
+    step = 1
+    if key == ord("h"):
+        hmin = clamp(hmin - step, 0, 179)
+    elif key == ord("H"):
+        hmin = clamp(hmin + step, 0, 179)
+    elif key == ord("j"):
+        hmax = clamp(hmax - step, 0, 179)
+    elif key == ord("J"):
+        hmax = clamp(hmax + step, 0, 179)
+    elif key == ord("s"):
+        smin = clamp(smin - step, 0, 255)
+    elif key == ord("S"):
+        smin = clamp(smin + step, 0, 255)
+    elif key == ord("d"):
+        smax = clamp(smax - step, 0, 255)
+    elif key == ord("D"):
+        smax = clamp(smax + step, 0, 255)
+    elif key == ord("v"):
+        vmin = clamp(vmin - step, 0, 255)
+    elif key == ord("V"):
+        vmin = clamp(vmin + step, 0, 255)
+    elif key == ord("b"):
+        vmax = clamp(vmax - step, 0, 255)
+    elif key == ord("B"):
+        vmax = clamp(vmax + step, 0, 255)
+    return hmin, hmax, smin, smax, vmin, vmax
+
+
+def start_stdin_reader():
+    queue = deque()
+    lock = threading.Lock()
+
+    def _reader():
+        for line in sys.stdin:
+            with lock:
+                queue.append(line.rstrip("\n"))
+
+    thread = threading.Thread(target=_reader, daemon=True)
+    thread.start()
+    return queue, lock
+
+
+def poll_stdin_line(queue, lock):
+    with lock:
+        if not queue:
+            return None
+        return queue.popleft()
+
+
+def parse_tune_line(line, hmin, hmax, smin, smax, vmin, vmax):
+    if not line:
+        return hmin, hmax, smin, smax, vmin, vmax
+    if line.lower() == "p":
+        print(f"Hmin={hmin} Hmax={hmax} Smin={smin} Smax={smax} Vmin={vmin} Vmax={vmax}")
+        return hmin, hmax, smin, smax, vmin, vmax
+    parts = line.replace(",", " ").split()
+    if len(parts) == 6 and all(p.isdigit() for p in parts):
+        hmin, hmax, smin, smax, vmin, vmax = map(int, parts)
+    else:
+        for part in parts:
+            if "=" not in part:
+                continue
+            key, value = part.split("=", 1)
+            if not value.isdigit():
+                continue
+            val = int(value)
+            key = key.lower()
+            if key == "hmin":
+                hmin = val
+            elif key == "hmax":
+                hmax = val
+            elif key == "smin":
+                smin = val
+            elif key == "smax":
+                smax = val
+            elif key == "vmin":
+                vmin = val
+            elif key == "vmax":
+                vmax = val
+    hmin = clamp(hmin, 0, 179)
+    hmax = clamp(hmax, 0, 179)
+    smin = clamp(smin, 0, 255)
+    smax = clamp(smax, 0, 255)
+    vmin = clamp(vmin, 0, 255)
+    vmax = clamp(vmax, 0, 255)
+    return hmin, hmax, smin, smax, vmin, vmax
 
 
 def compute_roi(frame, roi_top):
@@ -314,6 +414,8 @@ def select_ball_contour(
     pred_point,
     max_pred_dist,
     y0,
+    frame_width,
+    ignore_left_ratio,
     last_center,
     min_radius,
     max_radius,
@@ -331,10 +433,13 @@ def select_ball_contour(
     best = None
     best_radius = 0.0
     best_dist = None
+    ignore_left_px = int(frame_width * ignore_left_ratio)
 
     for c in cnts:
         ((x, y), radius) = cv2.minEnclosingCircle(c)
         if radius < min_radius or radius > max_radius:
+            continue
+        if int(x) < ignore_left_px:
             continue
 
         area = cv2.contourArea(c)
@@ -448,8 +553,17 @@ def main():
         print("Could not open video:", args.video)
         return
 
+    keyboard_tune = args.tune_keyboard
+    stdin_tune = args.tune_stdin
+    use_trackbars = args.tune and not args.headless and not keyboard_tune and not stdin_tune
+    stdin_queue = None
+    stdin_lock = None
+    if stdin_tune:
+        stdin_queue, stdin_lock = start_stdin_reader()
+        print("stdin tuning enabled: type Hmin=.. Hmax=.. Smin=.. Smax=.. Vmin=.. Vmax=.. and press Enter")
+
     if not args.headless:
-        if args.tune:
+        if use_trackbars:
             setup_tuning(args)
         cv2.namedWindow("roi", cv2.WINDOW_NORMAL)
         cv2.namedWindow("hsv_mask", cv2.WINDOW_NORMAL)
@@ -482,8 +596,10 @@ def main():
         kalman.measurementNoiseCov = np.eye(2, dtype=np.float32) * 1e-1
         kalman.errorCovPost = np.eye(4, dtype=np.float32)
 
-    lower = np.array([args.hmin, args.smin, args.vmin], dtype=np.uint8)
-    upper = np.array([args.hmax, args.smax, args.vmax], dtype=np.uint8)
+    hmin, smin, vmin = args.hmin, args.smin, args.vmin
+    hmax, smax, vmax = args.hmax, args.smax, args.vmax
+    lower = np.array([hmin, smin, vmin], dtype=np.uint8)
+    upper = np.array([hmax, smax, vmax], dtype=np.uint8)
     motion_thresh = args.motion_thresh
     hsv_erode = args.hsv_erode
     hsv_dilate = args.hsv_dilate
@@ -502,6 +618,7 @@ def main():
     min_ellipse_ratio = args.min_ellipse_ratio
     max_jump = args.max_jump
     min_motion_ratio = args.min_motion_ratio
+    ignore_left_ratio = min(max(args.ignore_left, 0.0), 0.95)
 
     writer = None
     writer_failed = False
@@ -515,8 +632,26 @@ def main():
         if frame_i % 60 == 0:
             print("frame", frame_i)
 
-        if args.tune and not args.headless:
-            lower, upper, motion_thresh, roi_top, min_radius, max_radius, min_area, max_area, max_jump, min_circ = read_tuning()
+        if use_trackbars:
+            try:
+                lower, upper, motion_thresh, roi_top, min_radius, max_radius, min_area, max_area, max_jump, min_circ = read_tuning()
+                hmin, smin, vmin = int(lower[0]), int(lower[1]), int(lower[2])
+                hmax, smax, vmax = int(upper[0]), int(upper[1]), int(upper[2])
+            except cv2.error:
+                keyboard_tune = True
+                use_trackbars = False
+
+        if args.tune and not args.headless and keyboard_tune:
+            lower = np.array([hmin, smin, vmin], dtype=np.uint8)
+            upper = np.array([hmax, smax, vmax], dtype=np.uint8)
+        if stdin_tune:
+            line = poll_stdin_line(stdin_queue, stdin_lock)
+            if line is not None:
+                hmin, hmax, smin, smax, vmin, vmax = parse_tune_line(
+                    line, hmin, hmax, smin, smax, vmin, vmax
+                )
+            lower = np.array([hmin, smin, vmin], dtype=np.uint8)
+            upper = np.array([hmax, smax, vmax], dtype=np.uint8)
 
         roi, y0 = compute_roi(frame, roi_top)
         hsv, blurred = hsv_mask(roi, lower, upper, hsv_erode, hsv_dilate)
@@ -534,6 +669,8 @@ def main():
             prediction = kalman.predict()
             pred_point = (int(prediction[0, 0]), int(prediction[1, 0]))
 
+        ignore_left_px = int(frame.shape[1] * ignore_left_ratio)
+
         best = select_ball_contour(
             final_mask,
             motion,
@@ -542,6 +679,8 @@ def main():
             pred_point,
             args.kalman_max_distance if kalman is not None else None,
             y0,
+            frame.shape[1],
+            ignore_left_ratio,
             last_center,
             min_radius,
             max_radius,
@@ -559,14 +698,18 @@ def main():
         center = None
         if best is not None:
             x, y, radius, center = best
-            cv2.circle(frame, (int(x), int(y + y0)), int(radius), (0, 255, 0), 2)
-            cv2.circle(frame, center, 4, (0, 0, 255), -1)
-            last_center = center
-            lost_frames = 0
+            if center[0] < ignore_left_px:
+                center = None
+            else:
+                cv2.circle(frame, (int(x), int(y + y0)), int(radius), (0, 255, 0), 2)
+                cv2.circle(frame, center, 4, (0, 0, 255), -1)
+                last_center = center
+                lost_frames = 0
             if kalman is not None:
-                measurement = np.array([[np.float32(center[0])], [np.float32(center[1])]])
-                kalman.correct(measurement)
-                kalman_misses = 0
+                if center is not None:
+                    measurement = np.array([[np.float32(center[0])], [np.float32(center[1])]])
+                    kalman.correct(measurement)
+                    kalman_misses = 0
         else:
             lost_frames += 1
             if lost_frames > args.lost_reset:
@@ -576,7 +719,7 @@ def main():
                 if kalman_misses > args.kalman_miss_reset:
                     kalman = None
 
-        if pred_point is not None:
+        if pred_point is not None and pred_point[0] >= ignore_left_px:
             cv2.circle(frame, pred_point, 4, (0, 255, 255), -1)
             if center is None:
                 center = pred_point
@@ -590,6 +733,12 @@ def main():
             cv2.line(frame, pts[i - 1], pts[i], (255, 0, 0), thickness)
 
         cv2.line(frame, (0, y0), (frame.shape[1], y0), (0, 255, 255), 1)
+        if ignore_left_px > 0:
+            cv2.line(frame, (ignore_left_px, 0), (ignore_left_px, frame.shape[0]), (0, 0, 255), 2)
+
+        if args.tune and not args.headless and (keyboard_tune or stdin_tune):
+            overlay = f"H[{hmin},{hmax}] S[{smin},{smax}] V[{vmin},{vmax}]"
+            cv2.putText(frame, overlay, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
         if not args.headless:
             show_window("roi", roi, args.display_max_width, args.display_max_height)
@@ -617,6 +766,12 @@ def main():
 
         if not args.headless:
             key = cv2.waitKey(1) & 0xFF
+            if args.tune and keyboard_tune:
+                hmin, hmax, smin, smax, vmin, vmax = apply_keyboard_tuning(
+                    key, hmin, hmax, smin, smax, vmin, vmax
+                )
+                if key == ord("p"):
+                    print(f"Hmin={hmin} Hmax={hmax} Smin={smin} Smax={smax} Vmin={vmin} Vmax={vmax}")
             if key == ord("q"):
                 break
 
