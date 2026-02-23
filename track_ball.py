@@ -264,6 +264,9 @@ def parse_args():
     ap.add_argument("--headless", action="store_true", help="disable all OpenCV windows")
     ap.add_argument("--display-max-width", type=int, default=1280, help="max display width (0 = no limit)")
     ap.add_argument("--display-max-height", type=int, default=720, help="max display height (0 = no limit)")
+    ap.add_argument("--no-court-overlay", action="store_true", help="disable mini court overlay")
+    ap.add_argument("--court-overlay-size", type=int, default=260, help="mini court overlay width in pixels")
+    ap.add_argument("--court-overlay-margin", type=int, default=12, help="mini court overlay margin in pixels")
     ap.add_argument("--force-ffmpeg", action="store_true", help="always use ffmpeg for decoding input")
     return ap.parse_args()
 
@@ -605,6 +608,75 @@ def scale_for_display(image, max_width, max_height):
 def show_window(name, image, max_width, max_height):
     display = scale_for_display(image, max_width, max_height)
     cv2.imshow(name, display)
+
+def draw_court_overlay(frame, enabled, size, margin):
+    if not enabled:
+        return
+    h, w = frame.shape[:2]
+    size = int(max(120, size))
+    margin = int(max(0, margin))
+
+    # Standard doubles court: 78 ft (length) x 36 ft (width)
+    court_len = 78.0
+    court_wid = 36.0
+    aspect = court_len / court_wid
+
+    overlay_w = size
+    overlay_h = int(round(overlay_w * aspect))
+    if overlay_h + 2 * margin > h:
+        overlay_h = max(120, h - 2 * margin)
+        overlay_w = int(round(overlay_h / aspect))
+    x1 = max(0, w - margin - overlay_w)
+    y1 = max(0, margin)
+    x2 = min(w - margin, x1 + overlay_w)
+    y2 = min(h - margin, y1 + overlay_h)
+
+    # Recompute in case of clamping
+    overlay_w = max(1, x2 - x1)
+    overlay_h = max(1, y2 - y1)
+
+    # Helper to map court coords to image
+    # Court coords: (0..court_wid, 0..court_len)
+    def pt(xw, yl):
+        x = int(x1 + (xw / court_wid) * overlay_w)
+        y = int(y1 + (yl / court_len) * overlay_h)
+        return x, y
+
+    # Draw background box
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (x1 - 4, y1 - 4), (x2 + 4, y2 + 4), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.35, frame, 0.65, 0, frame)
+
+    color = (255, 255, 255)
+    thick = 2
+
+    # Outer doubles court
+    cv2.rectangle(frame, pt(0, 0), pt(court_wid, court_len), color, thick)
+
+    # Singles sidelines (27 ft wide, centered)
+    singles_left = (court_wid - 27.0) / 2.0
+    singles_right = singles_left + 27.0
+    cv2.line(frame, pt(singles_left, 0), pt(singles_left, court_len), color, thick)
+    cv2.line(frame, pt(singles_right, 0), pt(singles_right, court_len), color, thick)
+
+    # Net line (center)
+    net_y = court_len / 2.0
+    cv2.line(frame, pt(0, net_y), pt(court_wid, net_y), color, thick)
+
+    # Service lines (21 ft from net)
+    service_dist = 21.0
+    cv2.line(frame, pt(singles_left, net_y - service_dist), pt(singles_right, net_y - service_dist), color, thick)
+    cv2.line(frame, pt(singles_left, net_y + service_dist), pt(singles_right, net_y + service_dist), color, thick)
+
+    # Center service line
+    center_x = court_wid / 2.0
+    cv2.line(frame, pt(center_x, net_y - service_dist), pt(center_x, net_y + service_dist), color, thick)
+
+    # Center marks (1 ft)
+    mark_len = 1.0
+    cv2.line(frame, pt(center_x, 0), pt(center_x, mark_len), color, thick)
+    cv2.line(frame, pt(center_x, court_len - mark_len), pt(center_x, court_len), color, thick)
+
 
 def draw_debug_overlay(frame, lines, origin=(10, 10)):
     if not lines:
@@ -985,6 +1057,7 @@ def main():
             f"Jump: {max_jump} kalman_max_dist: {args.kalman_max_distance if kalman is not None else 'off'}",
         ]
         draw_debug_overlay(frame, overlay_lines, origin=(10, 10))
+        draw_court_overlay(frame, not args.no_court_overlay, args.court_overlay_size, args.court_overlay_margin)
 
         if not args.headless:
             show_window("roi", roi, args.display_max_width, args.display_max_height)
