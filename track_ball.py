@@ -1,12 +1,35 @@
 import argparse
+import os
 from collections import deque
 import subprocess
 import sys
 import threading
-from collections import deque
 
 import cv2
 import numpy as np
+
+
+PRESETS = {
+    "annotated2": {
+        "hmin": 20,
+        "hmax": 85,
+        "smin": 50,
+        "smax": 255,
+        "vmin": 50,
+        "vmax": 255,
+        "roi_top": 0.25,
+        "use_motion": True,
+        "min_motion_ratio": 0.03,
+        "max_radius": 12,
+        "max_area": 400,
+        "min_circularity": 0.35,
+        "min_solidity": 0.90,
+        "min_fill_ratio": 0.60,
+        "min_extent": 0.50,
+        "prefer_small": True,
+        "use_kalman": True,
+    }
+}
 
 
 class FFmpegCapture:
@@ -72,14 +95,15 @@ class FFmpegWriter:
             self._opened = False
 
 
-def open_video(path):
-    cap = cv2.VideoCapture(path)
-    if cap.isOpened():
-        return cap
+def open_video(path, force_ffmpeg=False):
+    if not force_ffmpeg:
+        cap = cv2.VideoCapture(path)
+        if cap.isOpened():
+            return cap
     ffmpeg_cap = open_video_with_ffmpeg(path)
     if ffmpeg_cap is not None and ffmpeg_cap.isOpened():
         return ffmpeg_cap
-    return cap
+    return cv2.VideoCapture(path)
 
 
 def open_writer_with_ffmpeg(path, width, height, fps):
@@ -160,6 +184,7 @@ def open_video_with_ffmpeg(path):
                 "ffmpeg",
                 "-loglevel",
                 "error",
+                "-noautorotate",
                 "-i",
                 path,
                 "-f",
@@ -199,6 +224,15 @@ def parse_args():
     ap.add_argument("--hmax", type=int, default=85, help="HSV upper H (0-179)")
     ap.add_argument("--smax", type=int, default=255, help="HSV upper S (0-255)")
     ap.add_argument("--vmax", type=int, default=255, help="HSV upper V (0-255)")
+    ap.add_argument("--preset", type=str, help="apply a named preset (e.g. annotated2)")
+    ap.add_argument("--auto-hsv", action="store_true", help="auto-calibrate HSV range from motion samples")
+    ap.add_argument("--auto-hsv-frames", type=int, default=180, help="frames to sample for auto HSV")
+    ap.add_argument("--auto-hsv-samples", type=int, default=5000, help="max HSV samples to collect")
+    ap.add_argument("--auto-hsv-expand-h", type=int, default=8, help="expand auto HSV hue by this amount")
+    ap.add_argument("--auto-hsv-expand-s", type=int, default=40, help="expand auto HSV saturation by this amount")
+    ap.add_argument("--auto-hsv-expand-v", type=int, default=40, help="expand auto HSV value by this amount")
+    ap.add_argument("--auto-hsv-smin", type=int, default=40, help="min S for auto HSV samples")
+    ap.add_argument("--auto-hsv-vmin", type=int, default=40, help="min V for auto HSV samples")
     ap.add_argument("--motion-thresh", type=int, default=15, help="frame-diff threshold")
     ap.add_argument("--hsv-erode", type=int, default=1, help="HSV mask erosion iterations")
     ap.add_argument("--hsv-dilate", type=int, default=1, help="HSV mask dilation iterations")
@@ -222,12 +256,15 @@ def parse_args():
     ap.add_argument("--max-jump", type=int, default=250, help="max pixel jump between frames")
     ap.add_argument("--lost-reset", type=int, default=10, help="reset after N lost frames")
     ap.add_argument("--ignore-left", type=float, default=0.0, help="ignore left portion of frame (0-1)")
+    ap.add_argument("--ignore-right", type=float, default=0.0, help="ignore right portion of frame (0-1)")
+    ap.add_argument("--prefer-small", action="store_true", help="prefer smaller candidates when ungated")
     ap.add_argument("--tune", action="store_true", help="enable trackbar tuning UI")
     ap.add_argument("--tune-keyboard", action="store_true", help="tune HSV via keyboard in the main window")
     ap.add_argument("--tune-stdin", action="store_true", help="tune HSV by typing values in the terminal")
     ap.add_argument("--headless", action="store_true", help="disable all OpenCV windows")
     ap.add_argument("--display-max-width", type=int, default=1280, help="max display width (0 = no limit)")
     ap.add_argument("--display-max-height", type=int, default=720, help="max display height (0 = no limit)")
+    ap.add_argument("--force-ffmpeg", action="store_true", help="always use ffmpeg for decoding input")
     return ap.parse_args()
 
 
@@ -416,6 +453,7 @@ def select_ball_contour(
     y0,
     frame_width,
     ignore_left_ratio,
+    ignore_right_ratio,
     last_center,
     min_radius,
     max_radius,
@@ -428,23 +466,38 @@ def select_ball_contour(
     min_solidity,
     min_ellipse_ratio,
     max_jump,
+    prefer_small,
 ):
     cnts, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     best = None
     best_radius = 0.0
     best_dist = None
+    best_score = None
+    debug = {
+        "contours": len(cnts),
+        "passed_radius": 0,
+        "passed_area": 0,
+        "passed_shape": 0,
+        "passed_motion": 0,
+        "passed_gate": 0,
+    }
     ignore_left_px = int(frame_width * ignore_left_ratio)
+    ignore_right_px = int(frame_width * (1.0 - ignore_right_ratio))
 
     for c in cnts:
         ((x, y), radius) = cv2.minEnclosingCircle(c)
         if radius < min_radius or radius > max_radius:
             continue
+        debug["passed_radius"] += 1
         if int(x) < ignore_left_px:
+            continue
+        if int(x) > ignore_right_px:
             continue
 
         area = cv2.contourArea(c)
         if area < min_area or area > max_area:
             continue
+        debug["passed_area"] += 1
 
         if radius > 0:
             circle_area = np.pi * radius * radius
@@ -478,6 +531,7 @@ def select_ball_contour(
                 ellipse_ratio = min(ma, ma_minor) / max(ma, ma_minor)
                 if ellipse_ratio < min_ellipse_ratio:
                     continue
+        debug["passed_shape"] += 1
 
         if motion_valid and min_motion_ratio > 0:
             motion_mask = np.zeros_like(mask)
@@ -489,6 +543,7 @@ def select_ball_contour(
             motion_ratio = motion_hits / float(motion_area)
             if motion_ratio < min_motion_ratio:
                 continue
+        debug["passed_motion"] += 1
 
         m = cv2.moments(c)
         if m["m00"] == 0:
@@ -509,6 +564,7 @@ def select_ball_contour(
             dy = cand_center[1] - last_center[1]
             if dx * dx + dy * dy > max_jump * max_jump:
                 continue
+        debug["passed_gate"] += 1
 
         if pred_point is not None:
             dxp = cand_center[0] - pred_point[0]
@@ -517,11 +573,17 @@ def select_ball_contour(
             if best is None or dist2 < best_dist:
                 best = (x, y, radius, cand_center)
                 best_dist = dist2
-        elif radius > best_radius:
-            best_radius = radius
-            best = (x, y, radius, cand_center)
+        else:
+            if prefer_small:
+                score = -radius
+            else:
+                score = radius
+            if best is None or score > best_score:
+                best_score = score
+                best_radius = radius
+                best = (x, y, radius, cand_center)
 
-    return best
+    return best, debug
 
 
 def scale_for_display(image, max_width, max_height):
@@ -544,11 +606,170 @@ def show_window(name, image, max_width, max_height):
     display = scale_for_display(image, max_width, max_height)
     cv2.imshow(name, display)
 
+def draw_debug_overlay(frame, lines, origin=(10, 10)):
+    if not lines:
+        return
+    x, y = origin
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.5
+    thickness = 1
+    line_h = 18
+    width = 0
+    for line in lines:
+        (w, _), _ = cv2.getTextSize(line, font, font_scale, thickness)
+        width = max(width, w)
+    pad = 6
+    height = line_h * len(lines) + pad * 2 - 4
+    overlay = frame.copy()
+    cv2.rectangle(
+        overlay,
+        (x - pad, y - pad),
+        (x + width + pad, y + height),
+        (0, 0, 0),
+        -1,
+    )
+    cv2.addWeighted(overlay, 0.55, frame, 0.45, 0, frame)
+    for i, line in enumerate(lines):
+        yy = y + i * line_h + 12
+        cv2.putText(frame, line, (x, yy), font, font_scale, (0, 255, 255), thickness, cv2.LINE_AA)
+
+
+def auto_calibrate_hsv(video_path, args):
+    cap = open_video(video_path, force_ffmpeg=args.force_ffmpeg)
+    if not cap.isOpened():
+        print("Auto HSV: could not open video.")
+        return None
+
+    samples = []
+    prev_gray = None
+    total_samples = 0
+    frame_i = 0
+
+    while frame_i < args.auto_hsv_frames:
+        ok, frame = cap.read()
+        if not ok or frame is None or frame.size == 0:
+            break
+        frame_i += 1
+
+        roi, _ = compute_roi(frame, args.roi_top)
+        blurred = cv2.GaussianBlur(roi, (7, 7), 0)
+        gray = cv2.cvtColor(blurred, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (5, 5), 0)
+        if prev_gray is None:
+            prev_gray = gray
+            continue
+        delta = cv2.absdiff(prev_gray, gray)
+        prev_gray = gray
+
+        motion_thresh = max(1, args.motion_thresh)
+        _, motion = cv2.threshold(delta, motion_thresh, 255, cv2.THRESH_BINARY)
+        if args.motion_erode > 0:
+            motion = cv2.erode(motion, None, iterations=args.motion_erode)
+        if args.motion_dilate > 0:
+            motion = cv2.dilate(motion, None, iterations=args.motion_dilate)
+
+        cnts, _ = cv2.findContours(motion.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not cnts:
+            continue
+        hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
+
+        for c in cnts:
+            ((x, y), radius) = cv2.minEnclosingCircle(c)
+            if radius < args.min_radius or radius > args.max_radius:
+                continue
+            area = cv2.contourArea(c)
+            if area < args.min_area or area > args.max_area:
+                continue
+
+            mask = np.zeros(motion.shape, dtype=np.uint8)
+            cv2.drawContours(mask, [c], -1, 255, -1)
+            ys, xs = np.where(mask > 0)
+            if ys.size == 0:
+                continue
+
+            idx = np.arange(ys.size)
+            if idx.size > 200:
+                idx = np.random.choice(idx, size=200, replace=False)
+            ys = ys[idx]
+            xs = xs[idx]
+
+            vals = hsv[ys, xs]
+            if vals.size == 0:
+                continue
+            s_ok = vals[:, 1] >= args.auto_hsv_smin
+            v_ok = vals[:, 2] >= args.auto_hsv_vmin
+            vals = vals[s_ok & v_ok]
+            if vals.size == 0:
+                continue
+
+            samples.append(vals)
+            total_samples += vals.shape[0]
+            if total_samples >= args.auto_hsv_samples:
+                break
+        if total_samples >= args.auto_hsv_samples:
+            break
+
+    cap.release()
+
+    if not samples:
+        print("Auto HSV: no samples collected; keeping defaults.")
+        return None
+
+    samples = np.vstack(samples)
+    h = samples[:, 0]
+    s = samples[:, 1]
+    v = samples[:, 2]
+
+    hmin = int(np.percentile(h, 5))
+    hmax = int(np.percentile(h, 95))
+    smin = int(np.percentile(s, 5))
+    smax = int(np.percentile(s, 95))
+    vmin = int(np.percentile(v, 5))
+    vmax = int(np.percentile(v, 95))
+
+    hmin = clamp(hmin - args.auto_hsv_expand_h, 0, 179)
+    hmax = clamp(hmax + args.auto_hsv_expand_h, 0, 179)
+    smin = clamp(smin - args.auto_hsv_expand_s, 0, 255)
+    smax = clamp(smax + args.auto_hsv_expand_s, 0, 255)
+    vmin = clamp(vmin - args.auto_hsv_expand_v, 0, 255)
+    vmax = clamp(vmax + args.auto_hsv_expand_v, 0, 255)
+
+    print(
+        f"Auto HSV: H[{hmin},{hmax}] S[{smin},{smax}] V[{vmin},{vmax}] "
+        f"from {samples.shape[0]} samples."
+    )
+    return hmin, hmax, smin, smax, vmin, vmax
+
 
 def main():
     args = parse_args()
 
-    cap = open_video(args.video)
+    if not args.preset:
+        video_name = os.path.basename(args.video).lower()
+        if video_name.startswith("annotated2"):
+            args.preset = "annotated2"
+
+    if args.preset:
+        preset = PRESETS.get(args.preset.lower())
+        if preset is None:
+            print(f"Unknown preset: {args.preset}. Available: {', '.join(PRESETS.keys())}")
+            return
+        for key, value in preset.items():
+            setattr(args, key, value)
+        print(f"Preset applied: {args.preset}")
+
+    if args.auto_hsv:
+        auto = auto_calibrate_hsv(args.video, args)
+        if auto is not None:
+            hmin, hmax, smin, smax, vmin, vmax = auto
+            args.hmin = hmin
+            args.hmax = hmax
+            args.smin = smin
+            args.smax = smax
+            args.vmin = vmin
+            args.vmax = vmax
+
+    cap = open_video(args.video, force_ffmpeg=args.force_ffmpeg)
     if not cap.isOpened():
         print("Could not open video:", args.video)
         return
@@ -619,6 +840,7 @@ def main():
     max_jump = args.max_jump
     min_motion_ratio = args.min_motion_ratio
     ignore_left_ratio = min(max(args.ignore_left, 0.0), 0.95)
+    ignore_right_ratio = min(max(args.ignore_right, 0.0), 0.95)
 
     writer = None
     writer_failed = False
@@ -670,8 +892,9 @@ def main():
             pred_point = (int(prediction[0, 0]), int(prediction[1, 0]))
 
         ignore_left_px = int(frame.shape[1] * ignore_left_ratio)
+        ignore_right_px = int(frame.shape[1] * (1.0 - ignore_right_ratio))
 
-        best = select_ball_contour(
+        best, debug_counts = select_ball_contour(
             final_mask,
             motion,
             motion_valid,
@@ -681,6 +904,7 @@ def main():
             y0,
             frame.shape[1],
             ignore_left_ratio,
+            ignore_right_ratio,
             last_center,
             min_radius,
             max_radius,
@@ -693,12 +917,15 @@ def main():
             min_solidity,
             min_ellipse_ratio,
             max_jump,
+            args.prefer_small,
         )
 
         center = None
         if best is not None:
             x, y, radius, center = best
             if center[0] < ignore_left_px:
+                center = None
+            elif center[0] > ignore_right_px:
                 center = None
             else:
                 cv2.circle(frame, (int(x), int(y + y0)), int(radius), (0, 255, 0), 2)
@@ -719,7 +946,7 @@ def main():
                 if kalman_misses > args.kalman_miss_reset:
                     kalman = None
 
-        if pred_point is not None and pred_point[0] >= ignore_left_px:
+        if pred_point is not None and pred_point[0] >= ignore_left_px and pred_point[0] <= ignore_right_px:
             cv2.circle(frame, pred_point, 4, (0, 255, 255), -1)
             if center is None:
                 center = pred_point
@@ -735,10 +962,29 @@ def main():
         cv2.line(frame, (0, y0), (frame.shape[1], y0), (0, 255, 255), 1)
         if ignore_left_px > 0:
             cv2.line(frame, (ignore_left_px, 0), (ignore_left_px, frame.shape[0]), (0, 0, 255), 2)
+        if ignore_right_px < frame.shape[1]:
+            cv2.line(frame, (ignore_right_px, 0), (ignore_right_px, frame.shape[0]), (0, 0, 255), 2)
 
-        if args.tune and not args.headless and (keyboard_tune or stdin_tune):
-            overlay = f"H[{hmin},{hmax}] S[{smin},{smax}] V[{vmin},{vmax}]"
-            cv2.putText(frame, overlay, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        hsv_nz = cv2.countNonZero(hsv)
+        motion_nz = cv2.countNonZero(motion) if motion_valid else 0
+        final_nz = cv2.countNonZero(final_mask)
+        overlay_lines = [
+            f"Frame: {frame_i}",
+            f"ROI top: {roi_top:.2f} y0={y0}",
+            f"Ignore L/R: {ignore_left_ratio:.2f}/{ignore_right_ratio:.2f}",
+            f"HSV: H[{hmin},{hmax}] S[{smin},{smax}] V[{vmin},{vmax}]",
+            f"HSV erode/dilate: {hsv_erode}/{hsv_dilate}",
+            f"Motion thresh: {motion_thresh} erode/dilate: {motion_erode}/{motion_dilate}",
+            f"Use motion: {args.use_motion} min_motion_ratio: {min_motion_ratio:.2f}",
+            f"Mask nz: hsv={hsv_nz} motion={motion_nz} final={final_nz}",
+            f"Contours: {debug_counts['contours']} rad={debug_counts['passed_radius']} area={debug_counts['passed_area']} shape={debug_counts['passed_shape']} motion={debug_counts['passed_motion']} gate={debug_counts['passed_gate']}",
+            f"Center: {center} Last: {last_center} Lost: {lost_frames}",
+            f"Kalman: {kalman is not None} misses={kalman_misses} pred={pred_point}",
+            f"Radius/area limits: r[{min_radius},{max_radius}] area[{min_area},{max_area}]",
+            f"Shape: circ>={min_circ:.2f} fill>={min_fill_ratio:.2f} ext>={min_extent:.2f} ar<={max_aspect_ratio:.2f} sol>={min_solidity:.2f} ell>={min_ellipse_ratio:.2f}",
+            f"Jump: {max_jump} kalman_max_dist: {args.kalman_max_distance if kalman is not None else 'off'}",
+        ]
+        draw_debug_overlay(frame, overlay_lines, origin=(10, 10))
 
         if not args.headless:
             show_window("roi", roi, args.display_max_width, args.display_max_height)
