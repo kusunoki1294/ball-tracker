@@ -1,4 +1,6 @@
 import argparse
+import json
+import math
 import os
 from collections import deque
 import subprocess
@@ -267,6 +269,11 @@ def parse_args():
     ap.add_argument("--no-court-overlay", action="store_true", help="disable mini court overlay")
     ap.add_argument("--court-overlay-size", type=int, default=260, help="mini court overlay width in pixels")
     ap.add_argument("--court-overlay-margin", type=int, default=12, help="mini court overlay margin in pixels")
+    ap.add_argument("--auto-court-lines", action="store_true", help="auto-detect court lines once from the first frame")
+    ap.add_argument("--court-calib-file", default="court_calib.json", help="court calibration file path")
+    ap.add_argument("--no-court-lines", action="store_true", help="disable perspective court lines")
+    ap.add_argument("--manual-court", action="store_true", help="manually click 6 court points on the first frame")
+    ap.add_argument("--doubles", action="store_true", help="use doubles boundaries for in/out check")
     ap.add_argument("--force-ffmpeg", action="store_true", help="always use ffmpeg for decoding input")
     return ap.parse_args()
 
@@ -609,7 +616,7 @@ def show_window(name, image, max_width, max_height):
     display = scale_for_display(image, max_width, max_height)
     cv2.imshow(name, display)
 
-def draw_court_overlay(frame, enabled, size, margin):
+def draw_court_overlay(frame, enabled, size, margin, include_singles=True):
     if not enabled:
         return
     h, w = frame.shape[:2]
@@ -654,10 +661,11 @@ def draw_court_overlay(frame, enabled, size, margin):
     cv2.rectangle(frame, pt(0, 0), pt(court_wid, court_len), color, thick)
 
     # Singles sidelines (27 ft wide, centered)
-    singles_left = (court_wid - 27.0) / 2.0
-    singles_right = singles_left + 27.0
-    cv2.line(frame, pt(singles_left, 0), pt(singles_left, court_len), color, thick)
-    cv2.line(frame, pt(singles_right, 0), pt(singles_right, court_len), color, thick)
+    if include_singles:
+        singles_left = (court_wid - 27.0) / 2.0
+        singles_right = singles_left + 27.0
+        cv2.line(frame, pt(singles_left, 0), pt(singles_left, court_len), color, thick)
+        cv2.line(frame, pt(singles_right, 0), pt(singles_right, court_len), color, thick)
 
     # Net line (center)
     net_y = court_len / 2.0
@@ -665,17 +673,337 @@ def draw_court_overlay(frame, enabled, size, margin):
 
     # Service lines (21 ft from net)
     service_dist = 21.0
-    cv2.line(frame, pt(singles_left, net_y - service_dist), pt(singles_right, net_y - service_dist), color, thick)
-    cv2.line(frame, pt(singles_left, net_y + service_dist), pt(singles_right, net_y + service_dist), color, thick)
+    if include_singles:
+        cv2.line(frame, pt(singles_left, net_y - service_dist), pt(singles_right, net_y - service_dist), color, thick)
+        cv2.line(frame, pt(singles_left, net_y + service_dist), pt(singles_right, net_y + service_dist), color, thick)
 
     # Center service line
     center_x = court_wid / 2.0
-    cv2.line(frame, pt(center_x, net_y - service_dist), pt(center_x, net_y + service_dist), color, thick)
+    if include_singles:
+        cv2.line(frame, pt(center_x, net_y - service_dist), pt(center_x, net_y + service_dist), color, thick)
 
     # Center marks (1 ft)
     mark_len = 1.0
     cv2.line(frame, pt(center_x, 0), pt(center_x, mark_len), color, thick)
     cv2.line(frame, pt(center_x, court_len - mark_len), pt(center_x, court_len), color, thick)
+
+
+
+def load_court_calibration(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+    points = data.get("points")
+    net_points = data.get("net_points")
+    if not isinstance(points, list) or len(points) != 4:
+        return None
+    try:
+        court_points = [(float(x), float(y)) for x, y in points]
+        net = None
+        if isinstance(net_points, list) and len(net_points) == 2:
+            net = [(float(x), float(y)) for x, y in net_points]
+        return {"points": court_points, "net_points": net}
+    except Exception:
+        return None
+
+
+def save_court_calibration(path, points, net_points=None):
+    data = {"points": [[float(x), float(y)] for x, y in points]}
+    if net_points is not None:
+        data["net_points"] = [[float(x), float(y)] for x, y in net_points]
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+
+def court_world_lines(include_singles=True):
+    court_len = 78.0
+    court_wid = 36.0
+    singles_wid = 27.0
+    singles_left = (court_wid - singles_wid) / 2.0
+    singles_right = singles_left + singles_wid
+    net_y = court_len / 2.0
+    service_dist = 21.0
+    center_x = court_wid / 2.0
+    mark_len = 1.0
+
+    lines = []
+    # Outer doubles court
+    lines.append(([(0, 0), (court_wid, 0), (court_wid, court_len), (0, court_len)], True))
+    # Singles sidelines
+    if include_singles:
+        lines.append(([(singles_left, 0), (singles_left, court_len)], False))
+        lines.append(([(singles_right, 0), (singles_right, court_len)], False))
+    # Net line
+    lines.append(([(0, net_y), (court_wid, net_y)], False))
+    # Service lines
+    lines.append(([(singles_left, net_y - service_dist), (singles_right, net_y - service_dist)], False))
+    lines.append(([(singles_left, net_y + service_dist), (singles_right, net_y + service_dist)], False))
+    # Center service line
+    lines.append(([(center_x, net_y - service_dist), (center_x, net_y + service_dist)], False))
+    # Center marks
+    lines.append(([(center_x, 0), (center_x, mark_len)], False))
+    lines.append(([(center_x, court_len - mark_len), (center_x, court_len)], False))
+    return lines
+
+
+def draw_court_lines(frame, homography, color=(255, 255, 255), thickness=2, include_singles=True):
+    if homography is None:
+        return
+    for pts, closed in court_world_lines(include_singles=include_singles):
+        src = np.array(pts, dtype=np.float32).reshape(-1, 1, 2)
+        dst = cv2.perspectiveTransform(src, homography).astype(int)
+        cv2.polylines(frame, [dst], closed, color, thickness, lineType=cv2.LINE_AA)
+
+
+def _angle_diff(a, b):
+    d = abs(a - b) % 180.0
+    return min(d, 180.0 - d)
+
+
+def _line_from_points(x1, y1, x2, y2):
+    a = y1 - y2
+    b = x2 - x1
+    c = x1 * y2 - x2 * y1
+    norm = math.hypot(a, b)
+    if norm == 0:
+        return None
+    return a / norm, b / norm, c / norm
+
+
+def _intersect(l1, l2):
+    a1, b1, c1 = l1
+    a2, b2, c2 = l2
+    det = a1 * b2 - a2 * b1
+    if abs(det) < 1e-6:
+        return None
+    x = (b1 * c2 - b2 * c1) / det
+    y = (c1 * a2 - c2 * a1) / det
+    return x, y
+
+
+def _order_court_corners(points):
+    # Assumes camera is behind the near baseline, so near side is bottom of image.
+    points = sorted(points, key=lambda p: p[1])
+    far = points[:2]
+    near = points[2:]
+    far_left, far_right = sorted(far, key=lambda p: p[0])
+    near_left, near_right = sorted(near, key=lambda p: p[0])
+    return [near_left, near_right, far_right, far_left]
+
+
+def detect_court_corners(frame):
+    h, w = frame.shape[:2]
+    max_dim = max(h, w)
+    scale = 1.0
+    if max_dim > 1280:
+        scale = 1280.0 / max_dim
+        frame = cv2.resize(frame, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+        h, w = frame.shape[:2]
+
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    # White line mask (low saturation, high value)
+    lower = np.array([0, 0, 160], dtype=np.uint8)
+    upper = np.array([179, 70, 255], dtype=np.uint8)
+    mask = cv2.inRange(hsv, lower, upper)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8), iterations=2)
+
+    edges = cv2.Canny(mask, 50, 150)
+    min_len = int(0.2 * min(h, w))
+    lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=80, minLineLength=min_len, maxLineGap=30)
+    if lines is None:
+        return None
+
+    angles = []
+    lengths = []
+    line_data = []
+    for (x1, y1, x2, y2) in lines[:, 0]:
+        dx = x2 - x1
+        dy = y2 - y1
+        length = math.hypot(dx, dy)
+        if length < min_len:
+            continue
+        ang = math.degrees(math.atan2(dy, dx))
+        if ang < 0:
+            ang += 180.0
+        angles.append(ang)
+        lengths.append(length)
+        line_data.append((x1, y1, x2, y2, ang, length))
+
+    if len(angles) < 4:
+        return None
+
+    # Histogram to find two dominant directions
+    hist = np.zeros(180, dtype=np.float32)
+    for ang, length in zip(angles, lengths):
+        hist[int(ang) % 180] += length
+
+    peak1 = int(np.argmax(hist))
+    hist2 = hist.copy()
+    for i in range(180):
+        if _angle_diff(i, peak1) < 20:
+            hist2[i] = 0
+    peak2 = int(np.argmax(hist2))
+    if hist2[peak2] == 0:
+        return None
+
+    group_a = []
+    group_b = []
+    for x1, y1, x2, y2, ang, length in line_data:
+        if _angle_diff(ang, peak1) <= _angle_diff(ang, peak2):
+            group_a.append((x1, y1, x2, y2))
+        else:
+            group_b.append((x1, y1, x2, y2))
+
+    if len(group_a) < 2 or len(group_b) < 2:
+        return None
+
+    def outer_lines(group):
+        lines_nf = []
+        for x1, y1, x2, y2 in group:
+            line = _line_from_points(x1, y1, x2, y2)
+            if line is None:
+                continue
+            lines_nf.append(line)
+        if len(lines_nf) < 2:
+            return None
+        cs = [l[2] for l in lines_nf]
+        min_i = int(np.argmin(cs))
+        max_i = int(np.argmax(cs))
+        return lines_nf[min_i], lines_nf[max_i]
+
+    a1, a2 = outer_lines(group_a) or (None, None)
+    b1, b2 = outer_lines(group_b) or (None, None)
+    if a1 is None or b1 is None:
+        return None
+
+    pts = []
+    for la in (a1, a2):
+        for lb in (b1, b2):
+            p = _intersect(la, lb)
+            if p is None:
+                continue
+            x, y = p
+            pts.append((x, y))
+
+    if len(pts) < 4:
+        return None
+
+    # Filter to points roughly inside image
+    pts = [(x, y) for x, y in pts if -0.2 * w <= x <= 1.2 * w and -0.2 * h <= y <= 1.2 * h]
+    if len(pts) < 4:
+        return None
+
+    # If extra points, keep the 4 that form the largest area
+    if len(pts) > 4:
+        pts = pts[:4]
+
+    if scale != 1.0:
+        pts = [(x / scale, y / scale) for x, y in pts]
+
+    return _order_court_corners(pts)
+
+
+def classify_ball_in_out(center, inv_homography, singles=True):
+    if center is None or inv_homography is None:
+        return None, None
+    pt = np.array([[center]], dtype=np.float32)
+    world = cv2.perspectiveTransform(pt, inv_homography)[0][0]
+    xw, yw = float(world[0]), float(world[1])
+
+    court_wid = 36.0
+    court_len = 78.0
+    if singles:
+        singles_left = (court_wid - 27.0) / 2.0
+        singles_right = singles_left + 27.0
+        in_bounds = singles_left <= xw <= singles_right and 0.0 <= yw <= court_len
+    else:
+        in_bounds = 0.0 <= xw <= court_wid and 0.0 <= yw <= court_len
+    return in_bounds, (xw, yw)
+
+
+def collect_manual_court_points(frame, max_width=1280, max_height=720):
+    points = []
+    net_points = []
+    window_name = "Manual Court Calibration"
+    h, w = frame.shape[:2]
+    scale = 1.0
+    if max_width > 0:
+        scale = min(scale, max_width / float(w))
+    if max_height > 0:
+        scale = min(scale, max_height / float(h))
+
+    def _draw():
+        if scale < 1.0:
+            display = cv2.resize(frame, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+        else:
+            display = frame.copy()
+        overlay = display.copy()
+        for i, (x, y) in enumerate(points):
+            dx, dy = int(x * scale), int(y * scale)
+            cv2.circle(overlay, (dx, dy), 6, (0, 255, 0), -1)
+            cv2.putText(
+                overlay,
+                f"{i+1}",
+                (dx + 8, dy - 8),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (0, 255, 0),
+                2,
+                cv2.LINE_AA,
+            )
+        for i, (x, y) in enumerate(net_points):
+            dx, dy = int(x * scale), int(y * scale)
+            cv2.circle(overlay, (dx, dy), 6, (0, 255, 255), -1)
+            cv2.putText(
+                overlay,
+                f"N{i+1}",
+                (dx + 8, dy - 8),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (0, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
+        instructions = [
+            "Click 4 corners in order:",
+            "1) Near-left  2) Near-right  3) Far-right  4) Far-left",
+            "Then click net bottom points: 5) Net-left  6) Net-right",
+            "Press 'r' to reset, 'q' to cancel, or wait until 6 points are set.",
+        ]
+        y = 30
+        for line in instructions:
+            cv2.putText(overlay, line, (20, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+            y += 28
+        cv2.imshow(window_name, overlay)
+
+    def _on_mouse(event, x, y, flags, param):
+        if event != cv2.EVENT_LBUTTONDOWN:
+            return
+        if scale > 0:
+            x = int(round(x / scale))
+            y = int(round(y / scale))
+        if len(points) < 4:
+            points.append((x, y))
+        elif len(net_points) < 2:
+            net_points.append((x, y))
+
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.setMouseCallback(window_name, _on_mouse)
+
+    while True:
+        _draw()
+        key = cv2.waitKey(20) & 0xFF
+        if key == ord("r"):
+            points.clear()
+            net_points.clear()
+        elif key == ord("q"):
+            cv2.destroyWindow(window_name)
+            return None
+        if len(points) == 4 and len(net_points) == 2:
+            cv2.destroyWindow(window_name)
+            return points, net_points
 
 
 def draw_debug_overlay(frame, lines, origin=(10, 10)):
@@ -914,6 +1242,57 @@ def main():
     ignore_left_ratio = min(max(args.ignore_left, 0.0), 0.95)
     ignore_right_ratio = min(max(args.ignore_right, 0.0), 0.95)
 
+    court_calib = load_court_calibration(args.court_calib_file)
+    if court_calib is None and args.auto_court_lines:
+        tmp_cap = open_video(args.video, force_ffmpeg=args.force_ffmpeg)
+        if tmp_cap.isOpened():
+            ok, tmp_frame = tmp_cap.read()
+            tmp_cap.release()
+            if ok and tmp_frame is not None:
+                court_points = detect_court_corners(tmp_frame)
+                if court_points is not None:
+                    save_court_calibration(args.court_calib_file, court_points)
+                    print(f"Auto court calibration saved to {args.court_calib_file}")
+                    court_calib = {"points": court_points, "net_points": None}
+
+    if args.manual_court:
+        tmp_cap = open_video(args.video, force_ffmpeg=args.force_ffmpeg)
+        if tmp_cap.isOpened():
+            ok, tmp_frame = tmp_cap.read()
+            tmp_cap.release()
+            if ok and tmp_frame is not None:
+                picked = collect_manual_court_points(tmp_frame, args.display_max_width, args.display_max_height)
+                if picked is None:
+                    print("Manual court calibration cancelled.")
+                    return
+                court_points, net_points = picked
+                save_court_calibration(args.court_calib_file, court_points, net_points)
+                print(f"Manual court calibration saved to {args.court_calib_file}")
+                court_calib = {"points": court_points, "net_points": net_points}
+        else:
+            print("Manual court calibration: could not open video.")
+            return
+
+    if court_calib is None or court_calib.get("net_points") is None:
+        print("Court calibration missing or incomplete. Run with --manual-court to click 6 points.")
+        return
+
+    court_homography = None
+    inv_court_homography = None
+    court_points = None
+    net_points = None
+    if court_calib is not None:
+        court_points = court_calib.get("points")
+        net_points = court_calib.get("net_points")
+    if court_points is not None:
+        world = np.array([[0.0, 0.0], [36.0, 0.0], [36.0, 78.0], [0.0, 78.0]], dtype=np.float32)
+        image = np.array(court_points, dtype=np.float32)
+        court_homography = cv2.getPerspectiveTransform(world, image)
+        try:
+            inv_court_homography = np.linalg.inv(court_homography)
+        except np.linalg.LinAlgError:
+            inv_court_homography = None
+
     writer = None
     writer_failed = False
 
@@ -1031,6 +1410,21 @@ def main():
             thickness = int(np.sqrt(args.buffer / float(i + 1)) * 2)
             cv2.line(frame, pts[i - 1], pts[i], (255, 0, 0), thickness)
 
+        in_out, world_pt = classify_ball_in_out(center, inv_court_homography, singles=not args.doubles)
+        if in_out is not None:
+            status = "IN" if in_out else "OUT"
+            color = (0, 255, 0) if in_out else (0, 0, 255)
+            cv2.putText(
+                frame,
+                f"BALL: {status}",
+                (20, frame.shape[0] - 20),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1.0,
+                color,
+                3,
+                cv2.LINE_AA,
+            )
+
         cv2.line(frame, (0, y0), (frame.shape[1], y0), (0, 255, 255), 1)
         if ignore_left_px > 0:
             cv2.line(frame, (ignore_left_px, 0), (ignore_left_px, frame.shape[0]), (0, 0, 255), 2)
@@ -1057,7 +1451,23 @@ def main():
             f"Jump: {max_jump} kalman_max_dist: {args.kalman_max_distance if kalman is not None else 'off'}",
         ]
         draw_debug_overlay(frame, overlay_lines, origin=(10, 10))
-        draw_court_overlay(frame, not args.no_court_overlay, args.court_overlay_size, args.court_overlay_margin)
+        draw_court_overlay(
+            frame,
+            not args.no_court_overlay,
+            args.court_overlay_size,
+            args.court_overlay_margin,
+            include_singles=args.doubles,
+        )
+        if not args.no_court_lines:
+            draw_court_lines(frame, court_homography, include_singles=args.doubles)
+        if net_points is not None:
+            cv2.line(
+                frame,
+                (int(net_points[0][0]), int(net_points[0][1])),
+                (int(net_points[1][0]), int(net_points[1][1])),
+                (0, 255, 255),
+                2,
+            )
 
         if not args.headless:
             show_window("roi", roi, args.display_max_width, args.display_max_height)
