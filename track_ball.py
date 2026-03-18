@@ -10,6 +10,11 @@ import threading
 import cv2
 import numpy as np
 
+try:
+    from ultralytics import YOLO
+except Exception:
+    YOLO = None
+
 
 PRESETS = {
     "annotated2": {
@@ -30,7 +35,28 @@ PRESETS = {
         "min_extent": 0.50,
         "prefer_small": True,
         "use_kalman": True,
-    }
+    },
+    "tennis5": {
+        "hmin": 20,
+        "hmax": 80,
+        "smin": 50,
+        "smax": 255,
+        "vmin": 50,
+        "vmax": 255,
+        "roi_top": 0.25,
+        "use_motion": True,
+        "min_motion_ratio": 0.04,
+        "max_radius": 12,
+        "max_area": 320,
+        "min_circularity": 0.32,
+        "min_solidity": 0.88,
+        "min_fill_ratio": 0.58,
+        "min_extent": 0.48,
+        "prefer_small": True,
+        "use_kalman": True,
+        "kalman_max_distance": 250,
+        "max_jump": 500,
+    },
 }
 
 
@@ -274,7 +300,16 @@ def parse_args():
     ap.add_argument("--no-court-lines", action="store_true", help="disable perspective court lines")
     ap.add_argument("--manual-court", action="store_true", help="manually click 6 court points on the first frame")
     ap.add_argument("--doubles", action="store_true", help="use doubles boundaries for in/out check")
+    ap.add_argument("--yolo-model", type=str, help="path to YOLO .pt model for ball detection")
+    ap.add_argument("--yolo-conf", type=float, default=0.25, help="YOLO confidence threshold")
+    ap.add_argument("--yolo-imgsz", type=int, default=640, help="YOLO inference image size")
+    ap.add_argument("--yolo-device", type=str, default="", help="YOLO device (e.g. cpu, 0)")
+    ap.add_argument("--yolo-every", type=int, default=1, help="run YOLO every N frames")
+    ap.add_argument("--yolo-only", action="store_true", help="use YOLO only (skip HSV/motion)")
+    ap.add_argument("--yolo-log", type=str, help="write YOLO detections to CSV (frame,x,y,conf)")
+    ap.add_argument("--yolo-log-max-frames", type=int, default=0, help="max frames to log (0 = all)")
     ap.add_argument("--force-ffmpeg", action="store_true", help="always use ffmpeg for decoding input")
+    ap.add_argument("--court-gate-margin", type=float, default=2.0, help="allow this many feet outside court bounds when gating detections")
     return ap.parse_args()
 
 
@@ -453,6 +488,25 @@ def contour_circularity(contour):
     return (4.0 * np.pi * area) / (perimeter * perimeter)
 
 
+def project_to_court_world(center, inv_homography):
+    if center is None or inv_homography is None:
+        return None
+    pt = np.array([[center]], dtype=np.float32)
+    world = cv2.perspectiveTransform(pt, inv_homography)[0][0]
+    return float(world[0]), float(world[1])
+
+
+def world_point_in_court(world_pt, singles=True, margin=0.0):
+    if world_pt is None:
+        return False
+    xw, yw = world_pt
+    court_wid = 27.0 if singles else 36.0
+    x_min = (36.0 - court_wid) / 2.0 if singles else 0.0
+    x_max = x_min + court_wid
+    margin = max(0.0, margin)
+    return x_min - margin <= xw <= x_max + margin and -margin <= yw <= 78.0 + margin
+
+
 def select_ball_contour(
     mask,
     motion,
@@ -477,6 +531,9 @@ def select_ball_contour(
     min_ellipse_ratio,
     max_jump,
     prefer_small,
+    inv_court_homography=None,
+    court_gate_margin=0.0,
+    singles=True,
 ):
     cnts, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     best = None
@@ -490,6 +547,7 @@ def select_ball_contour(
         "passed_shape": 0,
         "passed_motion": 0,
         "passed_gate": 0,
+        "passed_court": 0,
     }
     ignore_left_px = int(frame_width * ignore_left_ratio)
     ignore_right_px = int(frame_width * (1.0 - ignore_right_ratio))
@@ -563,17 +621,32 @@ def select_ball_contour(
         cy = int(m["m01"] / m["m00"])
         cand_center = (cx, cy + y0)
 
+        if inv_court_homography is not None:
+            world_pt = project_to_court_world(cand_center, inv_court_homography)
+            if not world_point_in_court(world_pt, singles=singles, margin=court_gate_margin):
+                continue
+        debug["passed_court"] += 1
+
+        gate_last_center = last_center
+        if gate_last_center is not None and inv_court_homography is not None:
+            last_world = project_to_court_world(gate_last_center, inv_court_homography)
+            if not world_point_in_court(last_world, singles=singles, margin=court_gate_margin):
+                gate_last_center = None
+
         if pred_point is not None and max_pred_dist is not None:
             dxp = cand_center[0] - pred_point[0]
             dyp = cand_center[1] - pred_point[1]
             dist2 = dxp * dxp + dyp * dyp
             if dist2 > max_pred_dist * max_pred_dist:
                 continue
-        elif last_center is not None:
-            dx = cand_center[0] - last_center[0]
-            dy = cand_center[1] - last_center[1]
+        elif gate_last_center is not None:
+            dx = cand_center[0] - gate_last_center[0]
+            dy = cand_center[1] - gate_last_center[1]
             if dx * dx + dy * dy > max_jump * max_jump:
-                continue
+                if inv_court_homography is not None and gate_last_center[1] - cand_center[1] > max_jump:
+                    pass
+                else:
+                    continue
         debug["passed_gate"] += 1
 
         if pred_point is not None:
@@ -906,11 +979,10 @@ def detect_court_corners(frame):
 
 
 def classify_ball_in_out(center, inv_homography, singles=True):
-    if center is None or inv_homography is None:
+    world = project_to_court_world(center, inv_homography)
+    if world is None:
         return None, None
-    pt = np.array([[center]], dtype=np.float32)
-    world = cv2.perspectiveTransform(pt, inv_homography)[0][0]
-    xw, yw = float(world[0]), float(world[1])
+    xw, yw = world
 
     court_wid = 36.0
     court_len = 78.0
@@ -1004,6 +1076,27 @@ def collect_manual_court_points(frame, max_width=1280, max_height=720):
         if len(points) == 4 and len(net_points) == 2:
             cv2.destroyWindow(window_name)
             return points, net_points
+
+
+def detect_ball_yolo(frame, model, conf, imgsz, device):
+    if model is None:
+        return None, None, None
+    device_arg = device if device else None
+    results = model.predict(frame, conf=conf, imgsz=imgsz, device=device_arg, verbose=False)
+    if not results:
+        return None, None, None
+    boxes = results[0].boxes
+    if boxes is None or len(boxes) == 0:
+        return None, None, None
+    confs = boxes.conf
+    if confs is None or len(confs) == 0:
+        return None, None, None
+    best_i = int(np.argmax(confs.cpu().numpy()))
+    x1, y1, x2, y2 = boxes.xyxy[best_i].tolist()
+    cx = int((x1 + x2) / 2.0)
+    cy = int((y1 + y2) / 2.0)
+    radius = int(max(2, min(x2 - x1, y2 - y1) / 2.0))
+    return (cx, cy), radius, float(confs[best_i])
 
 
 def draw_debug_overlay(frame, lines, origin=(10, 10)):
@@ -1144,10 +1237,16 @@ def auto_calibrate_hsv(video_path, args):
 def main():
     args = parse_args()
 
+    video_name = os.path.basename(args.video).lower()
     if not args.preset:
-        video_name = os.path.basename(args.video).lower()
         if video_name.startswith("annotated2"):
             args.preset = "annotated2"
+        elif video_name.startswith("tennis5") or video_name.startswith("annotated5"):
+            args.preset = "tennis5"
+
+    if args.court_calib_file == "court_calib.json":
+        if video_name.startswith("tennis5") or video_name.startswith("annotated5"):
+            args.court_calib_file = "court_calib_tennis5.json"
 
     if args.preset:
         preset = PRESETS.get(args.preset.lower())
@@ -1242,6 +1341,13 @@ def main():
     ignore_left_ratio = min(max(args.ignore_left, 0.0), 0.95)
     ignore_right_ratio = min(max(args.ignore_right, 0.0), 0.95)
 
+    yolo_model = None
+    if args.yolo_model:
+        if YOLO is None:
+            print("YOLO requested but ultralytics is not installed. Install ultralytics to use YOLO.")
+            return
+        yolo_model = YOLO(args.yolo_model)
+
     court_calib = load_court_calibration(args.court_calib_file)
     if court_calib is None and args.auto_court_lines:
         tmp_cap = open_video(args.video, force_ffmpeg=args.force_ffmpeg)
@@ -1295,6 +1401,12 @@ def main():
 
     writer = None
     writer_failed = False
+    last_yolo = None
+    yolo_log_f = None
+    if args.yolo_log:
+        yolo_log_f = open(args.yolo_log, "w", encoding="utf-8")
+        yolo_log_f.write("frame,x,y,conf\n")
+        yolo_log_f.flush()
 
     while True:
         ok, frame = cap.read()
@@ -1326,81 +1438,151 @@ def main():
             lower = np.array([hmin, smin, vmin], dtype=np.uint8)
             upper = np.array([hmax, smax, vmax], dtype=np.uint8)
 
-        roi, y0 = compute_roi(frame, roi_top)
-        hsv, blurred = hsv_mask(roi, lower, upper, hsv_erode, hsv_dilate)
-        prev_gray_before = prev_gray
-        motion, prev_gray = motion_mask(blurred, prev_gray, motion_thresh, motion_erode, motion_dilate)
-        motion_valid = prev_gray_before is not None
-
-        if args.use_motion and motion_valid:
-            final_mask = cv2.bitwise_and(hsv, motion)
-        else:
-            final_mask = hsv
-
-        pred_point = None
-        if kalman is not None:
-            prediction = kalman.predict()
-            pred_point = (int(prediction[0, 0]), int(prediction[1, 0]))
-
-        ignore_left_px = int(frame.shape[1] * ignore_left_ratio)
-        ignore_right_px = int(frame.shape[1] * (1.0 - ignore_right_ratio))
-
-        best, debug_counts = select_ball_contour(
-            final_mask,
-            motion,
-            motion_valid,
-            min_motion_ratio,
-            pred_point,
-            args.kalman_max_distance if kalman is not None else None,
-            y0,
-            frame.shape[1],
-            ignore_left_ratio,
-            ignore_right_ratio,
-            last_center,
-            min_radius,
-            max_radius,
-            min_area,
-            max_area,
-            min_circ,
-            min_fill_ratio,
-            min_extent,
-            max_aspect_ratio,
-            min_solidity,
-            min_ellipse_ratio,
-            max_jump,
-            args.prefer_small,
-        )
-
-        center = None
-        if best is not None:
-            x, y, radius, center = best
-            if center[0] < ignore_left_px:
-                center = None
-            elif center[0] > ignore_right_px:
-                center = None
+        yolo_center = None
+        yolo_radius = None
+        yolo_conf = None
+        if yolo_model is not None and args.yolo_every > 0:
+            if frame_i % args.yolo_every == 0:
+                yolo_center, yolo_radius, yolo_conf = detect_ball_yolo(
+                    frame, yolo_model, args.yolo_conf, args.yolo_imgsz, args.yolo_device
+                )
+                last_yolo = (yolo_center, yolo_radius, yolo_conf)
+            elif last_yolo is not None:
+                yolo_center, yolo_radius, yolo_conf = last_yolo
+        if yolo_log_f is not None and (args.yolo_log_max_frames <= 0 or frame_i <= args.yolo_log_max_frames):
+            if yolo_center is None or yolo_conf is None:
+                yolo_log_f.write(f"{frame_i},,,\n")
             else:
-                cv2.circle(frame, (int(x), int(y + y0)), int(radius), (0, 255, 0), 2)
+                yolo_log_f.write(f"{frame_i},{yolo_center[0]},{yolo_center[1]},{yolo_conf:.4f}\n")
+
+        if args.yolo_only and yolo_model is not None:
+            roi, y0 = compute_roi(frame, roi_top)
+            hsv = np.zeros(roi.shape[:2], dtype=np.uint8)
+            motion = np.zeros(roi.shape[:2], dtype=np.uint8)
+            final_mask = hsv
+            motion_valid = False
+            debug_counts = {"contours": 0, "passed_radius": 0, "passed_area": 0, "passed_shape": 0, "passed_motion": 0, "passed_gate": 0, "passed_court": 0}
+
+            pred_point = None
+            if kalman is not None:
+                prediction = kalman.predict()
+                pred_point = (int(prediction[0, 0]), int(prediction[1, 0]))
+
+            ignore_left_px = int(frame.shape[1] * ignore_left_ratio)
+            ignore_right_px = int(frame.shape[1] * (1.0 - ignore_right_ratio))
+            center = yolo_center
+            if center is not None and (center[0] < ignore_left_px or center[0] > ignore_right_px):
+                center = None
+
+            if center is not None:
+                if yolo_radius:
+                    cv2.circle(frame, center, int(yolo_radius), (0, 255, 0), 2)
                 cv2.circle(frame, center, 4, (0, 0, 255), -1)
                 last_center = center
                 lost_frames = 0
-            if kalman is not None:
-                if center is not None:
+                if kalman is not None:
                     measurement = np.array([[np.float32(center[0])], [np.float32(center[1])]])
                     kalman.correct(measurement)
                     kalman_misses = 0
+            else:
+                lost_frames += 1
+                if lost_frames > args.lost_reset:
+                    last_center = None
+                if kalman is not None:
+                    kalman_misses += 1
+                    if kalman_misses > args.kalman_miss_reset:
+                        kalman = None
         else:
-            lost_frames += 1
-            if lost_frames > args.lost_reset:
-                last_center = None
-            if kalman is not None:
-                kalman_misses += 1
-                if kalman_misses > args.kalman_miss_reset:
-                    kalman = None
+            roi, y0 = compute_roi(frame, roi_top)
+            hsv, blurred = hsv_mask(roi, lower, upper, hsv_erode, hsv_dilate)
+            prev_gray_before = prev_gray
+            motion, prev_gray = motion_mask(blurred, prev_gray, motion_thresh, motion_erode, motion_dilate)
+            motion_valid = prev_gray_before is not None
 
-        if pred_point is not None and pred_point[0] >= ignore_left_px and pred_point[0] <= ignore_right_px:
-            cv2.circle(frame, pred_point, 4, (0, 255, 255), -1)
-            if center is None:
-                center = pred_point
+            if args.use_motion and motion_valid:
+                final_mask = cv2.bitwise_and(hsv, motion)
+            else:
+                final_mask = hsv
+
+            pred_point = None
+            if kalman is not None:
+                prediction = kalman.predict()
+                pred_point = (int(prediction[0, 0]), int(prediction[1, 0]))
+
+            ignore_left_px = int(frame.shape[1] * ignore_left_ratio)
+            ignore_right_px = int(frame.shape[1] * (1.0 - ignore_right_ratio))
+
+            best, debug_counts = select_ball_contour(
+                final_mask,
+                motion,
+                motion_valid,
+                min_motion_ratio,
+                pred_point,
+                args.kalman_max_distance if kalman is not None else None,
+                y0,
+                frame.shape[1],
+                ignore_left_ratio,
+                ignore_right_ratio,
+                last_center,
+                min_radius,
+                max_radius,
+                min_area,
+                max_area,
+                min_circ,
+                min_fill_ratio,
+                min_extent,
+                max_aspect_ratio,
+                min_solidity,
+                min_ellipse_ratio,
+                max_jump,
+                args.prefer_small,
+                inv_court_homography=inv_court_homography,
+                court_gate_margin=args.court_gate_margin,
+                singles=not args.doubles,
+            )
+
+            center = None
+            if best is not None:
+                x, y, radius, center = best
+                if center[0] < ignore_left_px:
+                    center = None
+                elif center[0] > ignore_right_px:
+                    center = None
+                else:
+                    cv2.circle(frame, (int(x), int(y + y0)), int(radius), (0, 255, 0), 2)
+                    cv2.circle(frame, center, 4, (0, 0, 255), -1)
+                    last_center = center
+                    lost_frames = 0
+                if kalman is not None and center is not None:
+                    measurement = np.array([[np.float32(center[0])], [np.float32(center[1])]])
+                    kalman.correct(measurement)
+                    kalman_misses = 0
+            else:
+                lost_frames += 1
+                if lost_frames > args.lost_reset:
+                    last_center = None
+                if kalman is not None:
+                    kalman_misses += 1
+                    if kalman_misses > args.kalman_miss_reset:
+                        kalman = None
+
+            if center is None and yolo_center is not None:
+                if yolo_center[0] >= ignore_left_px and yolo_center[0] <= ignore_right_px:
+                    center = yolo_center
+                    if yolo_radius:
+                        cv2.circle(frame, center, int(yolo_radius), (0, 255, 0), 2)
+                    cv2.circle(frame, center, 4, (255, 255, 0), -1)
+                    last_center = center
+                    lost_frames = 0
+                    if kalman is not None:
+                        measurement = np.array([[np.float32(center[0])], [np.float32(center[1])]])
+                        kalman.correct(measurement)
+                        kalman_misses = 0
+
+            if pred_point is not None and pred_point[0] >= ignore_left_px and pred_point[0] <= ignore_right_px:
+                cv2.circle(frame, pred_point, 4, (0, 255, 255), -1)
+                if center is None:
+                    center = pred_point
 
         pts.appendleft(center)
 
@@ -1443,12 +1625,12 @@ def main():
             f"Motion thresh: {motion_thresh} erode/dilate: {motion_erode}/{motion_dilate}",
             f"Use motion: {args.use_motion} min_motion_ratio: {min_motion_ratio:.2f}",
             f"Mask nz: hsv={hsv_nz} motion={motion_nz} final={final_nz}",
-            f"Contours: {debug_counts['contours']} rad={debug_counts['passed_radius']} area={debug_counts['passed_area']} shape={debug_counts['passed_shape']} motion={debug_counts['passed_motion']} gate={debug_counts['passed_gate']}",
+            f"Contours: {debug_counts['contours']} rad={debug_counts['passed_radius']} area={debug_counts['passed_area']} shape={debug_counts['passed_shape']} motion={debug_counts['passed_motion']} court={debug_counts['passed_court']} gate={debug_counts['passed_gate']}",
             f"Center: {center} Last: {last_center} Lost: {lost_frames}",
             f"Kalman: {kalman is not None} misses={kalman_misses} pred={pred_point}",
             f"Radius/area limits: r[{min_radius},{max_radius}] area[{min_area},{max_area}]",
             f"Shape: circ>={min_circ:.2f} fill>={min_fill_ratio:.2f} ext>={min_extent:.2f} ar<={max_aspect_ratio:.2f} sol>={min_solidity:.2f} ell>={min_ellipse_ratio:.2f}",
-            f"Jump: {max_jump} kalman_max_dist: {args.kalman_max_distance if kalman is not None else 'off'}",
+            f"Jump: {max_jump} kalman_max_dist: {args.kalman_max_distance if kalman is not None else 'off'} court_gate_margin: {args.court_gate_margin:.1f}",
         ]
         draw_debug_overlay(frame, overlay_lines, origin=(10, 10))
         draw_court_overlay(
@@ -1512,6 +1694,8 @@ def main():
     if writer is not None:
         writer.release()
     cap.release()
+    if yolo_log_f is not None:
+        yolo_log_f.close()
     if not args.headless:
         cv2.destroyAllWindows()
 
