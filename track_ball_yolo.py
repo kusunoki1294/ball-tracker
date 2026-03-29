@@ -191,6 +191,30 @@ def parse_args():
         help="Minimum travel in pixels before a ball track is considered moving.",
     )
     parser.add_argument(
+        "--far-ball-roi-height",
+        type=float,
+        default=0.58,
+        help="Fraction of frame height used for a high-resolution far-court ball pass.",
+    )
+    parser.add_argument(
+        "--far-ball-roi-width",
+        type=float,
+        default=0.82,
+        help="Fraction of frame width used for a high-resolution far-court ball pass.",
+    )
+    parser.add_argument(
+        "--far-ball-conf",
+        type=float,
+        default=0.10,
+        help="Confidence threshold for the far-court ball pass.",
+    )
+    parser.add_argument(
+        "--far-ball-imgsz",
+        type=int,
+        default=1600,
+        help="Inference size for the far-court ball pass.",
+    )
+    parser.add_argument(
         "--trail",
         type=int,
         default=20,
@@ -239,6 +263,41 @@ def run_track(model, frame, conf, imgsz, device, tracker, classes=None):
     return results[0] if results else None
 
 
+def run_ball_detection(model, frame, conf, imgsz, device):
+    result = run_track(model, frame, conf=conf, imgsz=imgsz, device=device, tracker=None)
+    return extract_detections(result)
+
+
+def offset_detections(detections, offset_x, offset_y):
+    shifted = []
+    for det in detections:
+        x1, y1, x2, y2 = det["bbox"]
+        shifted.append(
+            {
+                **det,
+                "bbox": [x1 + offset_x, y1 + offset_y, x2 + offset_x, y2 + offset_y],
+                "center": [det["center"][0] + offset_x, det["center"][1] + offset_y],
+            }
+        )
+    return shifted
+
+
+def dedupe_ball_detections(detections, center_distance=12.0):
+    kept = []
+    ordered = sorted(detections, key=lambda det: det.get("conf") or 0.0, reverse=True)
+    for det in ordered:
+        cx, cy = det["center"]
+        duplicate = False
+        for kept_det in kept:
+            kx, ky = kept_det["center"]
+            if math.hypot(cx - kx, cy - ky) <= center_distance:
+                duplicate = True
+                break
+        if not duplicate:
+            kept.append(det)
+    return kept
+
+
 def extract_detections(result):
     detections = []
     if result is None or result.boxes is None or len(result.boxes) == 0:
@@ -264,6 +323,34 @@ def extract_detections(result):
             }
         )
     return detections
+
+
+def detect_ball_candidates(frame, model, args):
+    detections = run_ball_detection(
+        model,
+        frame,
+        conf=args.ball_conf,
+        imgsz=args.imgsz,
+        device=args.device,
+    )
+
+    if args.far_ball_roi_height > 0 and args.far_ball_roi_width > 0:
+        frame_h, frame_w = frame.shape[:2]
+        roi_h = max(1, min(frame_h, int(frame_h * args.far_ball_roi_height)))
+        roi_w = max(1, min(frame_w, int(frame_w * args.far_ball_roi_width)))
+        roi_x1 = max(0, min(frame_w - roi_w, int((frame_w - roi_w) * 0.5)))
+        roi_y1 = 0
+        roi = frame[roi_y1 : roi_y1 + roi_h, roi_x1 : roi_x1 + roi_w]
+        roi_detections = run_ball_detection(
+            model,
+            roi,
+            conf=args.far_ball_conf,
+            imgsz=args.far_ball_imgsz,
+            device=args.device,
+        )
+        detections.extend(offset_detections(roi_detections, roi_x1, roi_y1))
+
+    return dedupe_ball_detections(detections)
 
 
 def select_ball(ball_detections):
@@ -395,17 +482,8 @@ def main():
             device=args.device,
             tracker=args.tracker,
         )
-        ball_result = run_track(
-            ball_model,
-            frame,
-            conf=args.ball_conf,
-            imgsz=args.imgsz,
-            device=args.device,
-            tracker=args.tracker,
-        )
-
         scene_detections = scene_tracker.update(extract_detections(scene_result))
-        ball_detections = ball_tracker.update(extract_detections(ball_result))
+        ball_detections = ball_tracker.update(detect_ball_candidates(frame, ball_model, args))
         ball_detections = ball_filter.filter(ball_detections)
         ball_detections = moving_ball_filter.filter(ball_detections)
         ball = select_ball(ball_detections)
