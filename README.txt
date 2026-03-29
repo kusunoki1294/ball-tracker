@@ -4,6 +4,7 @@ This project tracks a tennis ball in video using OpenCV-based color/motion detec
 
 Files
 - track_ball.py: main tracking script
+- track_ball_yolo.py: YOLO-only tracker for the ball, players, and other scene objects
 - court_calib.json: saved court calibration data
 - vids/: sample videos, model files, and helper files
 - yolo.txt: reference links about YOLO
@@ -41,6 +42,14 @@ Run with YOLO:
 
 python track_ball.py --video vids/tennis.MOV --yolo-model vids/models/tennisball.pt
 
+YOLO-only tracker:
+
+python track_ball_yolo.py --video vids/tennis.MOV --output yolo_tracking.mp4
+
+YOLO-only tracker with a custom scene model:
+
+python track_ball_yolo.py --video vids/tennis.MOV --scene-model /path/to/yolo_scene_model.pt --output yolo_tracking.mp4
+
 Useful options
 - `--tune`: open trackbars for HSV tuning
 - `--headless`: disable OpenCV windows
@@ -53,3 +62,4 @@ Notes
 - The script expects a video path through `--video`.
 - YOLO features only work if `ultralytics` is installed and a `.pt` model is provided.
 - Sample videos and a sample tennis ball model are already included under `vids/`.
+- `track_ball_yolo.py` uses the local tennis ball model at `vids/models/tennisball.pt` and a second YOLO model for people/scene objects. Its default scene model is `yolov8n.pt`, which may download automatically if it is not already available.
