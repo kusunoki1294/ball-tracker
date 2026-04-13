@@ -5,6 +5,7 @@ import os
 from collections import deque
 
 import cv2
+import numpy as np
 
 try:
     from ultralytics import YOLO
@@ -17,6 +18,8 @@ BALL_COLOR = (0, 255, 255)
 PLAYER_NEAR_COLOR = (255, 128, 0)
 PLAYER_FAR_COLOR = (0, 200, 255)
 GENERIC_COLOR = (0, 255, 0)
+BOUNCE_COLOR = (0, 0, 255)
+HIT_COLOR = (255, 0, 255)
 
 
 class SimpleTracker:
@@ -129,12 +132,361 @@ class MovingBallFilter:
         return filtered
 
 
+def point_to_bbox_distance(point, bbox):
+    x, y = point
+    x1, y1, x2, y2 = bbox
+    dx = max(x1 - x, 0, x - x2)
+    dy = max(y1 - y, 0, y - y2)
+    return math.hypot(dx, dy)
+
+
+def average_point(points):
+    valid = [point for point in points if point is not None]
+    if not valid:
+        return None
+    x = sum(point[0] for point in valid) / len(valid)
+    y = sum(point[1] for point in valid) / len(valid)
+    return (x, y)
+
+
+def draw_mini_court(frame, enabled, size, margin):
+    if not enabled:
+        return
+
+    frame_h, frame_w = frame.shape[:2]
+    court_len = 78.0
+    court_wid = 36.0
+    singles_wid = 27.0
+    aspect = court_len / court_wid
+    overlay_w = max(120, int(size))
+    overlay_h = int(overlay_w * aspect)
+
+    if overlay_h + margin * 2 > frame_h:
+        overlay_h = max(160, frame_h - margin * 2)
+        overlay_w = int(overlay_h / aspect)
+    if overlay_w + margin * 2 > frame_w:
+        overlay_w = max(120, frame_w - margin * 2)
+        overlay_h = int(overlay_w * aspect)
+
+    x1 = max(0, frame_w - overlay_w - margin)
+    y1 = margin
+    x2 = min(frame_w - 1, x1 + overlay_w)
+    y2 = min(frame_h - 1, y1 + overlay_h)
+
+    panel = frame[y1:y2, x1:x2]
+    if panel.size == 0:
+        return
+
+    tint = panel.copy()
+    tint[:] = (24, 42, 18)
+    cv2.addWeighted(tint, 0.72, panel, 0.28, 0, panel)
+
+    color = (235, 245, 235)
+    thick = 1 if overlay_w < 180 else 2
+
+    def pt(xw, yl):
+        px = int(x1 + (xw / court_wid) * overlay_w)
+        py = int(y1 + (yl / court_len) * overlay_h)
+        return (px, py)
+
+    cv2.rectangle(frame, (x1, y1), (x2, y2), (200, 220, 200), 1)
+
+    singles_left = (court_wid - singles_wid) / 2.0
+    singles_right = singles_left + singles_wid
+    service_y_top = 21.0
+    service_y_bottom = court_len - 21.0
+    net_y = court_len / 2.0
+    center_x = court_wid / 2.0
+
+    cv2.rectangle(frame, pt(singles_left, 0), pt(singles_right, court_len), color, thick)
+    cv2.line(frame, pt(singles_left, service_y_top), pt(singles_right, service_y_top), color, thick)
+    cv2.line(frame, pt(singles_left, service_y_bottom), pt(singles_right, service_y_bottom), color, thick)
+    cv2.line(frame, pt(singles_left, net_y), pt(singles_right, net_y), color, thick)
+    cv2.line(frame, pt(center_x, service_y_top), pt(center_x, service_y_bottom), color, thick)
+
+    mark_len = 2.0
+    cv2.line(frame, pt(center_x, 0), pt(center_x, mark_len), color, thick)
+    cv2.line(frame, pt(center_x, court_len - mark_len), pt(center_x, court_len), color, thick)
+
+
+def load_court_calibration(path):
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+    points = data.get("points")
+    net_points = data.get("net_points")
+    if not isinstance(points, list) or len(points) != 4:
+        return None
+
+    try:
+        court_points = [(float(x), float(y)) for x, y in points]
+        net = None
+        if isinstance(net_points, list) and len(net_points) == 2:
+            net = [(float(x), float(y)) for x, y in net_points]
+    except Exception:
+        return None
+    return {"points": court_points, "net_points": net}
+
+
+def build_inverse_court_homography(court_calib):
+    if not court_calib or court_calib.get("points") is None:
+        return None
+    world = np.array([[0.0, 0.0], [36.0, 0.0], [36.0, 78.0], [0.0, 78.0]], dtype=np.float32)
+    image = np.array(court_calib["points"], dtype=np.float32)
+    homography = cv2.getPerspectiveTransform(world, image)
+    try:
+        return np.linalg.inv(homography)
+    except np.linalg.LinAlgError:
+        return None
+
+
+def project_to_court_world(center, inv_homography):
+    if center is None or inv_homography is None:
+        return None
+    point = np.array([[center]], dtype=np.float32)
+    world = cv2.perspectiveTransform(point, inv_homography)[0][0]
+    return float(world[0]), float(world[1])
+
+
+def world_point_in_singles_court(world_point, margin=0.0):
+    if world_point is None:
+        return False
+    xw, yw = world_point
+    singles_left = (36.0 - 27.0) / 2.0
+    singles_right = singles_left + 27.0
+    return singles_left - margin <= xw <= singles_right + margin and -margin <= yw <= 78.0 + margin
+
+
+class EventDetector:
+    def __init__(
+        self,
+        bounce_min_vertical_change,
+        bounce_min_gap_frames,
+        bounce_x_margin_ratio,
+        bounce_y_margin_ratio,
+        player_hit_margin_px,
+        racket_hit_margin_px,
+        min_event_travel,
+        player_hit_upper_body_ratio,
+        hit_min_gap_frames,
+        hit_min_angle_change_deg,
+        hit_min_speed_change_ratio,
+        bounce_min_y_ratio,
+        inv_court_homography,
+        fallback_net_y,
+    ):
+        self.bounce_min_vertical_change = bounce_min_vertical_change
+        self.bounce_min_gap_frames = bounce_min_gap_frames
+        self.bounce_x_margin_ratio = bounce_x_margin_ratio
+        self.bounce_y_margin_ratio = bounce_y_margin_ratio
+        self.player_hit_margin_px = player_hit_margin_px
+        self.racket_hit_margin_px = racket_hit_margin_px
+        self.min_event_travel = min_event_travel
+        self.player_hit_upper_body_ratio = player_hit_upper_body_ratio
+        self.hit_min_gap_frames = hit_min_gap_frames
+        self.hit_min_angle_change_deg = hit_min_angle_change_deg
+        self.hit_min_speed_change_ratio = hit_min_speed_change_ratio
+        self.bounce_min_y_ratio = bounce_min_y_ratio
+        self.inv_court_homography = inv_court_homography
+        self.fallback_net_y = fallback_net_y
+        self.history = deque(maxlen=11)
+        self.last_bounce_frame = -10**9
+        self.events = []
+        self.bounces = []
+        self.event_frames = set()
+
+    def update(self, frame_index, ball, frame_shape, players, rackets):
+        self.history.append(
+            {
+                "frame": frame_index,
+                "ball": tuple(ball["center"]) if ball is not None else None,
+                "players": [player for player in players if player is not None],
+                "rackets": [racket for racket in rackets if racket is not None],
+            }
+        )
+
+        if len(self.history) < 9:
+            return None
+
+        candidate_index = len(self.history) // 2
+        event = self._evaluate_candidate(candidate_index, frame_shape)
+        return event
+
+    def _evaluate_candidate(self, index, frame_shape):
+        history_items = list(self.history)
+        center_item = history_items[index]
+        candidate_frame = center_item["frame"]
+        if candidate_frame in self.event_frames:
+            return None
+
+        prev_items = history_items[max(0, index - 3) : index]
+        next_items = history_items[index + 1 : index + 4]
+        if len(prev_items) < 3 or len(next_items) < 3:
+            return None
+
+        prev_points = [item["ball"] for item in prev_items]
+        next_points = [item["ball"] for item in next_items]
+        p0 = average_point(prev_points)
+        p1 = center_item["ball"]
+        p2 = average_point(next_points)
+        if p0 is None or p1 is None or p2 is None:
+            return None
+
+        prev_close = prev_points[-1]
+        next_close = next_points[0]
+        if prev_close is None or next_close is None:
+            return None
+
+        in_vec = (p1[0] - p0[0], p1[1] - p0[1])
+        out_vec = (p2[0] - p1[0], p2[1] - p1[1])
+        in_speed = math.hypot(in_vec[0], in_vec[1])
+        out_speed = math.hypot(out_vec[0], out_vec[1])
+        if in_speed < self.min_event_travel or out_speed < self.min_event_travel:
+            return None
+
+        bounce_event = self._detect_bounce(
+            candidate_frame=candidate_frame,
+            point=p1,
+            frame_shape=frame_shape,
+            in_vec=in_vec,
+            out_vec=out_vec,
+            prev_points=prev_points,
+            next_points=next_points,
+            players=center_item["players"],
+            rackets=center_item["rackets"],
+            prev_close=prev_close,
+            next_close=next_close,
+        )
+        if bounce_event is not None:
+            return bounce_event
+        return None
+
+    def _detect_bounce(
+        self,
+        candidate_frame,
+        point,
+        frame_shape,
+        in_vec,
+        out_vec,
+        prev_points,
+        next_points,
+        players,
+        rackets,
+        prev_close,
+        next_close,
+    ):
+        if candidate_frame - self.last_bounce_frame < self.bounce_min_gap_frames:
+            return None
+
+        world_point = project_to_court_world(point, self.inv_court_homography)
+        if world_point is not None and not world_point_in_singles_court(world_point, margin=2.0):
+            return None
+
+        side = self._classify_court_side(point, world_point)
+        frame_h, frame_w = frame_shape[:2]
+        x_margin = int(frame_w * self.bounce_x_margin_ratio)
+        y_margin = int(frame_h * self.bounce_y_margin_ratio)
+        x, y = point
+        if x < x_margin or x > frame_w - x_margin:
+            return None
+        min_y_ratio = self.bounce_min_y_ratio if side == "near" else self.bounce_min_y_ratio * 0.45
+        if y < max(y_margin, frame_h * min_y_ratio) or y > frame_h - y_margin:
+            return None
+
+        if self._near_contact_zone(point, players, rackets, side):
+            return None
+
+        if any(ball_point is None for ball_point in prev_points + next_points):
+            return None
+
+        prev_avg_y = sum(ball_point[1] for ball_point in prev_points) / len(prev_points)
+        next_avg_y = sum(ball_point[1] for ball_point in next_points) / len(next_points)
+        pre_drop = y - prev_avg_y
+        post_rise = y - next_avg_y
+        close_drop = y - prev_close[1]
+        close_rise = y - next_close[1]
+
+        dy_in = in_vec[1]
+        dy_out = out_vec[1]
+        vertical_change = dy_in - dy_out
+        travel_threshold = self.min_event_travel if side == "near" else self.min_event_travel * 0.55
+        vertical_threshold = self.bounce_min_vertical_change if side == "near" else self.bounce_min_vertical_change * 0.55
+        if dy_in <= 0 or dy_out >= 0:
+            return None
+        if math.hypot(in_vec[0], in_vec[1]) < travel_threshold or math.hypot(out_vec[0], out_vec[1]) < travel_threshold:
+            return None
+        if vertical_change < vertical_threshold:
+            return None
+        if pre_drop < vertical_threshold * 0.7 or post_rise < vertical_threshold * 0.7:
+            return None
+        if close_drop < vertical_threshold * 0.25 or close_rise < vertical_threshold * 0.25:
+            return None
+        if y < prev_close[1] or y < next_close[1]:
+            return None
+
+        x_direction_consistent = (in_vec[0] == 0) or (out_vec[0] == 0) or (in_vec[0] * out_vec[0] >= 0)
+        if not x_direction_consistent and abs(in_vec[0] - out_vec[0]) > abs(vertical_change):
+            return None
+
+        event = {
+            "frame": candidate_frame,
+            "point": [int(x), int(y)],
+            "type": "bounce",
+            "side": side,
+            "vertical_change": round(vertical_change, 1),
+            "pre_drop": round(pre_drop, 1),
+            "post_rise": round(post_rise, 1),
+        }
+        self._record_event(event)
+        self.last_bounce_frame = candidate_frame
+        return event
+
+    def _classify_court_side(self, point, world_point):
+        if world_point is not None:
+            return "far" if world_point[1] < 39.0 else "near"
+        if self.fallback_net_y is not None:
+            return "far" if point[1] < self.fallback_net_y else "near"
+        return "far" if point[1] < 540 else "near"
+
+    def _near_contact_zone(self, point, players, rackets, side):
+        player_margin = self.player_hit_margin_px * (2.5 if side == "near" else 1.1)
+        racket_margin = self.racket_hit_margin_px * (2.2 if side == "near" else 1.2)
+
+        for player in players:
+            x1, y1, x2, y2 = player["bbox"]
+            zone = [
+                x1 - player_margin,
+                y1 - player_margin,
+                x2 + player_margin,
+                y2 + player_margin,
+            ]
+            if point_to_bbox_distance(point, zone) <= 0:
+                return True
+        for racket in rackets:
+            if point_to_bbox_distance(point, racket["bbox"]) <= racket_margin:
+                return True
+        return False
+
+    def _record_event(self, event):
+        self.event_frames.add(event["frame"])
+        self.events.append(event)
+        self.bounces.append(event)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="YOLO-only tennis tracking for the ball, players, and other scene objects."
     )
     parser.add_argument("--video", required=True, help="Path to the input video.")
     parser.add_argument("--output", help="Optional annotated output video path.")
+    parser.add_argument(
+        "--court-calib-file",
+        default="court_calib.json",
+        help="Court calibration file path used for side-aware bounce rules.",
+    )
     parser.add_argument(
         "--ball-model",
         default="vids/models/tennisball.pt",
@@ -213,6 +565,95 @@ def parse_args():
         type=int,
         default=1600,
         help="Inference size for the far-court ball pass.",
+    )
+    parser.add_argument(
+        "--bounce-min-vertical-change",
+        type=float,
+        default=14.0,
+        help="Minimum vertical direction change in pixels to count as a bounce.",
+    )
+    parser.add_argument(
+        "--bounce-min-gap-frames",
+        type=int,
+        default=12,
+        help="Minimum frames between bounce markers.",
+    )
+    parser.add_argument(
+        "--bounce-x-margin-ratio",
+        type=float,
+        default=0.06,
+        help="Ignore bounce candidates too close to the left or right frame edge.",
+    )
+    parser.add_argument(
+        "--bounce-y-margin-ratio",
+        type=float,
+        default=0.08,
+        help="Ignore bounce candidates too close to the top or bottom frame edge.",
+    )
+    parser.add_argument(
+        "--player-hit-margin-px",
+        type=int,
+        default=24,
+        help="Fallback player-box margin for classifying an event as a hit.",
+    )
+    parser.add_argument(
+        "--racket-hit-margin-px",
+        type=int,
+        default=30,
+        help="Classify an event near a racket box as a hit.",
+    )
+    parser.add_argument(
+        "--event-min-travel",
+        type=float,
+        default=18.0,
+        help="Minimum pre/post event travel in pixels required before creating a hit or bounce.",
+    )
+    parser.add_argument(
+        "--player-hit-upper-body-ratio",
+        type=float,
+        default=0.72,
+        help="Only the upper portion of a player box is eligible for hit classification.",
+    )
+    parser.add_argument(
+        "--hit-min-gap-frames",
+        type=int,
+        default=10,
+        help="Minimum frames between hit markers.",
+    )
+    parser.add_argument(
+        "--hit-min-angle-change-deg",
+        type=float,
+        default=28.0,
+        help="Minimum path angle change for confirming a hit near a player or racket.",
+    )
+    parser.add_argument(
+        "--hit-min-speed-change-ratio",
+        type=float,
+        default=0.22,
+        help="Minimum speed change ratio for confirming a hit near a player or racket.",
+    )
+    parser.add_argument(
+        "--bounce-min-y-ratio",
+        type=float,
+        default=0.22,
+        help="Ignore bounce candidates that are too high in the frame.",
+    )
+    parser.add_argument(
+        "--no-court-overlay",
+        action="store_true",
+        help="Disable the mini singles-court overlay.",
+    )
+    parser.add_argument(
+        "--court-overlay-size",
+        type=int,
+        default=180,
+        help="Mini court overlay width in pixels.",
+    )
+    parser.add_argument(
+        "--court-overlay-margin",
+        type=int,
+        default=12,
+        help="Mini court overlay margin in pixels.",
     )
     parser.add_argument(
         "--trail",
@@ -413,15 +854,39 @@ def draw_ball(frame, detection, trail):
         cv2.line(frame, trail[i - 1], trail[i], BALL_COLOR, thickness)
 
 
+def draw_events(frame, bounces):
+    for i, bounce in enumerate(bounces, start=1):
+        x, y = bounce["point"]
+        cv2.drawMarker(
+            frame,
+            (x, y),
+            BOUNCE_COLOR,
+            markerType=cv2.MARKER_TILTED_CROSS,
+            markerSize=18,
+            thickness=2,
+        )
+        cv2.putText(
+            frame,
+            f"Bounce {i}",
+            (x + 8, max(20, y - 8)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            BOUNCE_COLOR,
+            2,
+            cv2.LINE_AA,
+        )
+
+
 def format_track_suffix(detection):
     track_id = detection.get("track_id")
     return f"#{track_id}" if track_id is not None else ""
 
 
-def write_frame_log(handle, frame_index, ball, near_player, far_player, scene_detections):
+def write_frame_log(handle, frame_index, ball, near_player, far_player, scene_detections, event):
     row = {
         "frame": frame_index,
         "ball": ball,
+        "event": event,
         "player_near": near_player,
         "player_far": far_player,
         "scene": scene_detections,
@@ -436,6 +901,13 @@ def main():
         raise FileNotFoundError(f"Video not found: {args.video}")
     if not os.path.exists(args.ball_model):
         raise FileNotFoundError(f"Ball model not found: {args.ball_model}")
+
+    court_calib = load_court_calibration(args.court_calib_file)
+    inv_court_homography = build_inverse_court_homography(court_calib)
+    fallback_net_y = None
+    if court_calib is not None and court_calib.get("net_points") is not None:
+        net_points = court_calib["net_points"]
+        fallback_net_y = (net_points[0][1] + net_points[1][1]) / 2.0
 
     ball_model = load_model(args.ball_model)
     scene_model = load_model(args.scene_model)
@@ -465,6 +937,22 @@ def main():
         history_frames=max(2, args.ball_motion_history),
         min_travel_px=args.ball_min_travel,
     )
+    event_detector = EventDetector(
+        bounce_min_vertical_change=args.bounce_min_vertical_change,
+        bounce_min_gap_frames=max(1, args.bounce_min_gap_frames),
+        bounce_x_margin_ratio=args.bounce_x_margin_ratio,
+        bounce_y_margin_ratio=args.bounce_y_margin_ratio,
+        player_hit_margin_px=max(0, args.player_hit_margin_px),
+        racket_hit_margin_px=max(0, args.racket_hit_margin_px),
+        min_event_travel=args.event_min_travel,
+        player_hit_upper_body_ratio=args.player_hit_upper_body_ratio,
+        hit_min_gap_frames=max(1, args.hit_min_gap_frames),
+        hit_min_angle_change_deg=max(0.0, args.hit_min_angle_change_deg),
+        hit_min_speed_change_ratio=max(0.0, args.hit_min_speed_change_ratio),
+        bounce_min_y_ratio=max(0.0, min(1.0, args.bounce_min_y_ratio)),
+        inv_court_homography=inv_court_homography,
+        fallback_net_y=fallback_net_y,
+    )
     scene_tracker = SimpleTracker(max_distance=args.object_max_distance)
     frame_index = 0
 
@@ -488,6 +976,14 @@ def main():
         ball_detections = moving_ball_filter.filter(ball_detections)
         ball = select_ball(ball_detections)
         near_player, far_player, other_objects = split_players(scene_detections)
+        racket_detections = [det for det in scene_detections if det["class_name"] == "tennis racket"]
+        event = event_detector.update(
+            frame_index,
+            ball,
+            frame.shape,
+            [far_player, near_player],
+            racket_detections,
+        )
 
         if far_player is not None:
             draw_box(frame, far_player, PLAYER_FAR_COLOR, f"Player Far {format_track_suffix(far_player)}".strip())
@@ -501,10 +997,18 @@ def main():
             draw_ball(frame, ball, ball_trail)
         else:
             ball_trail.appendleft(None)
+        draw_events(frame, event_detector.bounces)
+        draw_mini_court(
+            frame,
+            enabled=not args.no_court_overlay,
+            size=args.court_overlay_size,
+            margin=args.court_overlay_margin,
+        )
 
         status = [
             f"frame={frame_index}",
             f"ball={'yes' if ball is not None else 'no'}",
+            f"bounces={len(event_detector.bounces)}",
             f"players={len([p for p in (far_player, near_player) if p is not None])}",
             f"objects={len(scene_detections)}",
         ]
@@ -520,7 +1024,7 @@ def main():
         )
 
         if log_handle is not None:
-            write_frame_log(log_handle, frame_index, ball, near_player, far_player, scene_detections)
+            write_frame_log(log_handle, frame_index, ball, near_player, far_player, scene_detections, event)
         if writer is not None:
             writer.write(frame)
         if not args.headless:
