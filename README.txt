@@ -11,12 +11,12 @@ Current status
   - other object boxes such as rackets and cars
 - The YOLO-only tracker is still experimental for:
   - bounce detection
-  - hit detection
-  - separating true bounces from racket-contact direction changes
+  - far-side bounce detection
+  - separating true bounces from player or racket contact points
 
 Files
 - `track_ball.py`: original tracker with HSV/motion and optional YOLO support
-- `track_ball_yolo.py`: YOLO-only tracker for ball, players, other objects, and experimental event markers
+- `track_ball_yolo.py`: YOLO-only tracker for ball, players, other objects, experimental bounce markers, and a mini court overlay with mapped ball/bounce points
 - `court_calib.json`: saved court calibration data
 - `vids/`: older sample videos, model files, helper files
 - `yoloVids/`: newer YOLO workflow videos and renders
@@ -113,12 +113,22 @@ What was added to `track_ball_yolo.py`
    - runs a second higher-resolution YOLO pass over the top portion of the frame
    - added because the iPhone `0.8x` footage makes the far-court ball very small
 
-8. Experimental event markers
-   - adds tentative `Bounce` and `Hit` markers
-   - these are currently not reliable enough
+8. Experimental bounce markers
+   - current event work is bounce-only for now
+   - hit markers were removed temporarily because they were too noisy
+
+9. Side-aware bounce filtering
+   - uses `court_calib.json` when available
+   - tries to treat near-side and far-side bounce candidates differently
+   - rejects candidates that project outside the singles court
+
+10. Mini singles-court overlay
+   - draws a small singles court in the top-right corner
+   - plots the current ball position and recent bounce markers when calibration is available
 
 Important YOLO-only options
 Main detection options
+- `--court-calib-file`: calibration file for side-aware bounce rules
 - `--ball-model`: ball detector path
 - `--scene-model`: scene detector path
 - `--ball-conf`: confidence threshold for the ball detector
@@ -143,32 +153,40 @@ Far-court ball options
 - `--far-ball-conf`
 - `--far-ball-imgsz`
 
-Experimental event options
+Experimental bounce options
 - `--bounce-min-vertical-change`
 - `--bounce-min-gap-frames`
 - `--bounce-x-margin-ratio`
 - `--bounce-y-margin-ratio`
+- `--bounce-min-y-ratio`
 - `--player-hit-margin-px`
 - `--racket-hit-margin-px`
 - `--event-min-travel`
+- `--court-calib-file`
+
+Unused legacy tuning options still present in the script
 - `--player-hit-upper-body-ratio`
+- `--hit-min-gap-frames`
+- `--hit-min-angle-change-deg`
+- `--hit-min-speed-change-ratio`
 
 Display/output options
 - `--hide-other-objects`
 - `--headless`
 - `--log-jsonl`
+- `--no-court-overlay`
+- `--court-overlay-size`
+- `--court-overlay-margin`
 
 Known issues
 YOLO-only tracker
 - Ball tracking is decent, but still not perfect, especially on the far side of the court.
 - The far-court improvement made detection better, but also made the script slower.
-- Event marking is not solved.
-- Bounce and hit markers are still being confused in some cases.
-- Early false event markers can still happen.
-- Nearby player/racket context is not yet enough to reliably separate:
-  - a bounce near a player
-  - a racket contact
-  - a noisy direction change
+- Bounce marking is still experimental.
+- Far-side bounces are still harder than near-side bounces.
+- Some player-contact points can still be mislabeled as bounces.
+- The script is not currently trying to show hit markers.
+- The mini court overlay depends on court calibration quality; bad calibration will place mapped points incorrectly.
 
 Environment issues encountered
 - Ultralytics `track()` pulled in a missing `lap` dependency, so the YOLO-only script uses a custom simple tracker instead.
@@ -188,12 +206,14 @@ Recommended workflow
 4. Evaluate:
    - ball quality
    - near/far player boxes
-   - false positives
-   - event markers
+   - false bounce markers
+   - missed near/far bounces
+   - mini court overlay placement
 
 5. Tune one problem at a time.
 
 Current takeaway
 - YOLO-only ball and player tracking is usable.
 - Far-ball tracking needed special handling because of the wide-angle phone footage.
-- Bounce/hit marking is still experimental and should not be treated as correct yet.
+- Bounce marking is still experimental and should not be treated as correct yet.
+- Hit detection is intentionally disabled for now while bounce quality is being improved.

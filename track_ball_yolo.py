@@ -149,11 +149,17 @@ def average_point(points):
     return (x, y)
 
 
-def draw_mini_court(frame, enabled, size, margin):
-    if not enabled:
-        return
+def order_court_corners(points):
+    points = sorted(points, key=lambda p: p[1])
+    far = points[:2]
+    near = points[2:]
+    far_left, far_right = sorted(far, key=lambda p: p[0])
+    near_left, near_right = sorted(near, key=lambda p: p[0])
+    return [near_left, near_right, far_right, far_left]
 
-    frame_h, frame_w = frame.shape[:2]
+
+def get_mini_court_layout(frame_shape, size, margin):
+    frame_h, frame_w = frame_shape[:2]
     court_len = 78.0
     court_wid = 36.0
     singles_wid = 27.0
@@ -172,10 +178,44 @@ def draw_mini_court(frame, enabled, size, margin):
     y1 = margin
     x2 = min(frame_w - 1, x1 + overlay_w)
     y2 = min(frame_h - 1, y1 + overlay_h)
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return {
+        "x1": x1,
+        "y1": y1,
+        "x2": x2,
+        "y2": y2,
+        "overlay_w": x2 - x1,
+        "overlay_h": y2 - y1,
+        "court_len": court_len,
+        "court_wid": court_wid,
+        "singles_wid": singles_wid,
+    }
 
+
+def mini_court_point(layout, xw, yw):
+    px = int(layout["x1"] + (xw / layout["court_wid"]) * layout["overlay_w"])
+    py = int(layout["y1"] + (yw / layout["court_len"]) * layout["overlay_h"])
+    return (px, py)
+
+
+def draw_mini_court(frame, enabled, size, margin):
+    if not enabled:
+        return None
+
+    layout = get_mini_court_layout(frame.shape, size=size, margin=margin)
+    if layout is None:
+        return None
+
+    x1 = layout["x1"]
+    y1 = layout["y1"]
+    x2 = layout["x2"]
+    y2 = layout["y2"]
+    overlay_w = layout["overlay_w"]
+    overlay_h = layout["overlay_h"]
     panel = frame[y1:y2, x1:x2]
     if panel.size == 0:
-        return
+        return None
 
     tint = panel.copy()
     tint[:] = (24, 42, 18)
@@ -185,12 +225,13 @@ def draw_mini_court(frame, enabled, size, margin):
     thick = 1 if overlay_w < 180 else 2
 
     def pt(xw, yl):
-        px = int(x1 + (xw / court_wid) * overlay_w)
-        py = int(y1 + (yl / court_len) * overlay_h)
-        return (px, py)
+        return mini_court_point(layout, xw, yl)
 
     cv2.rectangle(frame, (x1, y1), (x2, y2), (200, 220, 200), 1)
 
+    court_len = layout["court_len"]
+    court_wid = layout["court_wid"]
+    singles_wid = layout["singles_wid"]
     singles_left = (court_wid - singles_wid) / 2.0
     singles_right = singles_left + singles_wid
     service_y_top = 21.0
@@ -207,6 +248,33 @@ def draw_mini_court(frame, enabled, size, margin):
     mark_len = 2.0
     cv2.line(frame, pt(center_x, 0), pt(center_x, mark_len), color, thick)
     cv2.line(frame, pt(center_x, court_len - mark_len), pt(center_x, court_len), color, thick)
+    return layout
+
+
+def draw_mini_court_points(frame, layout, ball_world_point, bounce_world_points):
+    if layout is None:
+        return
+
+    singles_left = (layout["court_wid"] - layout["singles_wid"]) / 2.0
+    singles_right = singles_left + layout["singles_wid"]
+
+    def in_bounds(world_point):
+        if world_point is None:
+            return False
+        xw, yw = world_point
+        return singles_left <= xw <= singles_right and 0.0 <= yw <= layout["court_len"]
+
+    for world_point in bounce_world_points[-8:]:
+        if not in_bounds(world_point):
+            continue
+        point = mini_court_point(layout, world_point[0], world_point[1])
+        cv2.circle(frame, point, 4, BOUNCE_COLOR, -1)
+        cv2.circle(frame, point, 7, (255, 255, 255), 1)
+
+    if in_bounds(ball_world_point):
+        point = mini_court_point(layout, ball_world_point[0], ball_world_point[1])
+        cv2.circle(frame, point, 6, BALL_COLOR, -1)
+        cv2.circle(frame, point, 9, (40, 40, 40), 1)
 
 
 def load_court_calibration(path):
@@ -222,7 +290,7 @@ def load_court_calibration(path):
         return None
 
     try:
-        court_points = [(float(x), float(y)) for x, y in points]
+        court_points = order_court_corners([(float(x), float(y)) for x, y in points])
         net = None
         if isinstance(net_points, list) and len(net_points) == 2:
             net = [(float(x), float(y)) for x, y in net_points]
@@ -322,21 +390,26 @@ class EventDetector:
         if candidate_frame in self.event_frames:
             return None
 
-        prev_items = history_items[max(0, index - 3) : index]
-        next_items = history_items[index + 1 : index + 4]
+        prev_items = history_items[max(0, index - 4) : index]
+        next_items = history_items[index + 1 : index + 5]
         if len(prev_items) < 3 or len(next_items) < 3:
             return None
 
         prev_points = [item["ball"] for item in prev_items]
         next_points = [item["ball"] for item in next_items]
+        prev_valid = [point for point in prev_points if point is not None]
+        next_valid = [point for point in next_points if point is not None]
+        if len(prev_valid) < 2 or len(next_valid) < 2:
+            return None
+
         p0 = average_point(prev_points)
         p1 = center_item["ball"]
         p2 = average_point(next_points)
         if p0 is None or p1 is None or p2 is None:
             return None
 
-        prev_close = prev_points[-1]
-        next_close = next_points[0]
+        prev_close = prev_valid[-1]
+        next_close = next_valid[0]
         if prev_close is None or next_close is None:
             return None
 
@@ -353,8 +426,8 @@ class EventDetector:
             frame_shape=frame_shape,
             in_vec=in_vec,
             out_vec=out_vec,
-            prev_points=prev_points,
-            next_points=next_points,
+            prev_points=prev_valid,
+            next_points=next_valid,
             players=center_item["players"],
             rackets=center_item["rackets"],
             prev_close=prev_close,
@@ -399,9 +472,6 @@ class EventDetector:
         if self._near_contact_zone(point, players, rackets, side):
             return None
 
-        if any(ball_point is None for ball_point in prev_points + next_points):
-            return None
-
         prev_avg_y = sum(ball_point[1] for ball_point in prev_points) / len(prev_points)
         next_avg_y = sum(ball_point[1] for ball_point in next_points) / len(next_points)
         pre_drop = y - prev_avg_y
@@ -412,8 +482,8 @@ class EventDetector:
         dy_in = in_vec[1]
         dy_out = out_vec[1]
         vertical_change = dy_in - dy_out
-        travel_threshold = self.min_event_travel if side == "near" else self.min_event_travel * 0.55
-        vertical_threshold = self.bounce_min_vertical_change if side == "near" else self.bounce_min_vertical_change * 0.55
+        travel_threshold = self.min_event_travel if side == "near" else self.min_event_travel * 0.4
+        vertical_threshold = self.bounce_min_vertical_change if side == "near" else self.bounce_min_vertical_change * 0.4
         if dy_in <= 0 or dy_out >= 0:
             return None
         if math.hypot(in_vec[0], in_vec[1]) < travel_threshold or math.hypot(out_vec[0], out_vec[1]) < travel_threshold:
@@ -439,6 +509,7 @@ class EventDetector:
             "vertical_change": round(vertical_change, 1),
             "pre_drop": round(pre_drop, 1),
             "post_rise": round(post_rise, 1),
+            "world_point": [round(world_point[0], 2), round(world_point[1], 2)] if world_point is not None else None,
         }
         self._record_event(event)
         self.last_bounce_frame = candidate_frame
@@ -998,12 +1069,19 @@ def main():
         else:
             ball_trail.appendleft(None)
         draw_events(frame, event_detector.bounces)
-        draw_mini_court(
+        mini_court_layout = draw_mini_court(
             frame,
             enabled=not args.no_court_overlay,
             size=args.court_overlay_size,
             margin=args.court_overlay_margin,
         )
+        ball_world_point = project_to_court_world(ball["center"], inv_court_homography) if ball is not None else None
+        bounce_world_points = []
+        for bounce in event_detector.bounces:
+            world_point = bounce.get("world_point")
+            if isinstance(world_point, list) and len(world_point) == 2:
+                bounce_world_points.append((float(world_point[0]), float(world_point[1])))
+        draw_mini_court_points(frame, mini_court_layout, ball_world_point, bounce_world_points)
 
         status = [
             f"frame={frame_index}",
