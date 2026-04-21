@@ -2,6 +2,7 @@ import argparse
 import json
 import math
 import os
+import statistics
 from collections import deque
 
 import cv2
@@ -149,6 +150,19 @@ def average_point(points):
     return (x, y)
 
 
+def ball_contact_point(ball):
+    if not ball:
+        return None
+    bbox = ball.get("bbox")
+    if isinstance(bbox, list) and len(bbox) == 4:
+        x1, _y1, x2, y2 = bbox
+        return (float(x1 + x2) / 2.0, float(y2))
+    center = ball.get("center")
+    if isinstance(center, list) and len(center) == 2:
+        return (float(center[0]), float(center[1]))
+    return None
+
+
 def order_court_corners(points):
     points = sorted(points, key=lambda p: p[1])
     far = points[:2]
@@ -239,6 +253,7 @@ def draw_mini_court(frame, enabled, size, margin):
     net_y = court_len / 2.0
     center_x = court_wid / 2.0
 
+    cv2.rectangle(frame, pt(0.0, 0.0), pt(court_wid, court_len), color, thick)
     cv2.rectangle(frame, pt(singles_left, 0), pt(singles_right, court_len), color, thick)
     cv2.line(frame, pt(singles_left, service_y_top), pt(singles_right, service_y_top), color, thick)
     cv2.line(frame, pt(singles_left, service_y_bottom), pt(singles_right, service_y_bottom), color, thick)
@@ -255,14 +270,11 @@ def draw_mini_court_points(frame, layout, ball_world_point, bounce_world_points)
     if layout is None:
         return
 
-    singles_left = (layout["court_wid"] - layout["singles_wid"]) / 2.0
-    singles_right = singles_left + layout["singles_wid"]
-
     def in_bounds(world_point):
         if world_point is None:
             return False
         xw, yw = world_point
-        return singles_left <= xw <= singles_right and 0.0 <= yw <= layout["court_len"]
+        return 0.0 <= xw <= layout["court_wid"] and 0.0 <= yw <= layout["court_len"]
 
     for world_point in bounce_world_points[-8:]:
         if not in_bounds(world_point):
@@ -302,13 +314,31 @@ def load_court_calibration(path):
 def build_inverse_court_homography(court_calib):
     if not court_calib or court_calib.get("points") is None:
         return None
-    world = np.array([[0.0, 0.0], [36.0, 0.0], [36.0, 78.0], [0.0, 78.0]], dtype=np.float32)
+    # Calibration points are stored as near-left, near-right, far-right, far-left.
+    # Map them to world coordinates with the far baseline at y=0 and the near
+    # baseline at y=78 so near/far classification and the mini-court share the
+    # same orientation.
+    world = np.array([[0.0, 78.0], [36.0, 78.0], [36.0, 0.0], [0.0, 0.0]], dtype=np.float32)
     image = np.array(court_calib["points"], dtype=np.float32)
     homography = cv2.getPerspectiveTransform(world, image)
     try:
         return np.linalg.inv(homography)
     except np.linalg.LinAlgError:
         return None
+
+
+def calibration_fits_frame(court_calib, frame_shape, margin_px=24):
+    if not court_calib:
+        return False
+    frame_h, frame_w = frame_shape[:2]
+    all_points = list(court_calib.get("points") or [])
+    all_points.extend(court_calib.get("net_points") or [])
+    if not all_points:
+        return False
+    for x, y in all_points:
+        if x < -margin_px or x > frame_w + margin_px or y < -margin_px or y > frame_h + margin_px:
+            return False
+    return True
 
 
 def project_to_court_world(center, inv_homography):
@@ -319,13 +349,11 @@ def project_to_court_world(center, inv_homography):
     return float(world[0]), float(world[1])
 
 
-def world_point_in_singles_court(world_point, margin=0.0):
+def world_point_in_court(world_point, margin=0.0):
     if world_point is None:
         return False
     xw, yw = world_point
-    singles_left = (36.0 - 27.0) / 2.0
-    singles_right = singles_left + 27.0
-    return singles_left - margin <= xw <= singles_right + margin and -margin <= yw <= 78.0 + margin
+    return -margin <= xw <= 36.0 + margin and -margin <= yw <= 78.0 + margin
 
 
 class EventDetector:
@@ -371,6 +399,8 @@ class EventDetector:
             {
                 "frame": frame_index,
                 "ball": tuple(ball["center"]) if ball is not None else None,
+                "ball_contact": ball_contact_point(ball),
+                "ball_track_id": ball.get("track_id") if ball is not None else None,
                 "players": [player for player in players if player is not None],
                 "rackets": [racket for racket in rackets if racket is not None],
             }
@@ -397,9 +427,13 @@ class EventDetector:
 
         prev_points = [item["ball"] for item in prev_items]
         next_points = [item["ball"] for item in next_items]
+        prev_contact_points = [item["ball_contact"] for item in prev_items]
+        next_contact_points = [item["ball_contact"] for item in next_items]
         prev_valid = [point for point in prev_points if point is not None]
         next_valid = [point for point in next_points if point is not None]
         if len(prev_valid) < 2 or len(next_valid) < 2:
+            return None
+        if self._distinct_point_count(prev_valid) < 3 or self._distinct_point_count(next_valid) < 3:
             return None
 
         p0 = average_point(prev_points)
@@ -412,6 +446,10 @@ class EventDetector:
         next_close = next_valid[0]
         if prev_close is None or next_close is None:
             return None
+
+        contact_point = center_item["ball_contact"]
+        prev_contact_close = next((point for point in reversed(prev_contact_points) if point is not None), None)
+        next_contact_close = next((point for point in next_contact_points if point is not None), None)
 
         in_vec = (p1[0] - p0[0], p1[1] - p0[1])
         out_vec = (p2[0] - p1[0], p2[1] - p1[1])
@@ -432,6 +470,9 @@ class EventDetector:
             rackets=center_item["rackets"],
             prev_close=prev_close,
             next_close=next_close,
+            contact_point=contact_point,
+            prev_contact_close=prev_contact_close,
+            next_contact_close=next_contact_close,
         )
         if bounce_event is not None:
             return bounce_event
@@ -450,26 +491,34 @@ class EventDetector:
         rackets,
         prev_close,
         next_close,
+        contact_point,
+        prev_contact_close,
+        next_contact_close,
     ):
         if candidate_frame - self.last_bounce_frame < self.bounce_min_gap_frames:
             return None
 
-        world_point = project_to_court_world(point, self.inv_court_homography)
-        if world_point is not None and not world_point_in_singles_court(world_point, margin=2.0):
+        if self._trajectory_has_outlier(prev_points, point, next_points):
             return None
 
+        contact_point = contact_point or point
+        world_point = project_to_court_world(contact_point, self.inv_court_homography)
         side = self._classify_court_side(point, world_point)
+        if world_point is not None:
+            court_margin = 0.75
+            if not world_point_in_court(world_point, margin=court_margin):
+                return None
         frame_h, frame_w = frame_shape[:2]
         x_margin = int(frame_w * self.bounce_x_margin_ratio)
         y_margin = int(frame_h * self.bounce_y_margin_ratio)
-        x, y = point
+        x, y = contact_point
         if x < x_margin or x > frame_w - x_margin:
             return None
         min_y_ratio = self.bounce_min_y_ratio if side == "near" else self.bounce_min_y_ratio * 0.45
         if y < max(y_margin, frame_h * min_y_ratio) or y > frame_h - y_margin:
             return None
 
-        if self._near_contact_zone(point, players, rackets, side):
+        if self._near_contact_zone(contact_point, players, rackets, side):
             return None
 
         prev_avg_y = sum(ball_point[1] for ball_point in prev_points) / len(prev_points)
@@ -478,35 +527,66 @@ class EventDetector:
         post_rise = y - next_avg_y
         close_drop = y - prev_close[1]
         close_rise = y - next_close[1]
+        pre_rise = prev_avg_y - y
+        close_pre_rise = prev_close[1] - y
 
         dy_in = in_vec[1]
         dy_out = out_vec[1]
         vertical_change = dy_in - dy_out
+        speed_in = math.hypot(in_vec[0], in_vec[1])
+        speed_out = math.hypot(out_vec[0], out_vec[1])
         travel_threshold = self.min_event_travel if side == "near" else self.min_event_travel * 0.4
         vertical_threshold = self.bounce_min_vertical_change if side == "near" else self.bounce_min_vertical_change * 0.4
-        if dy_in <= 0 or dy_out >= 0:
+        far_margin = max(2.0, vertical_threshold * 0.35)
+        if speed_in < travel_threshold or speed_out < travel_threshold:
             return None
-        if math.hypot(in_vec[0], in_vec[1]) < travel_threshold or math.hypot(out_vec[0], out_vec[1]) < travel_threshold:
-            return None
-        if vertical_change < vertical_threshold:
-            return None
-        if pre_drop < vertical_threshold * 0.7 or post_rise < vertical_threshold * 0.7:
-            return None
-        if close_drop < vertical_threshold * 0.25 or close_rise < vertical_threshold * 0.25:
-            return None
-        if y < prev_close[1] or y < next_close[1]:
-            return None
+        pattern = "near_rebound"
+        if side == "near":
+            if dy_in <= -far_margin or dy_out >= far_margin:
+                return None
+            bounce_strength = max(vertical_change, pre_drop + post_rise, close_drop + close_rise)
+            if bounce_strength < vertical_threshold:
+                return None
+            pre_post_threshold = vertical_threshold * 0.7
+            if pre_drop < pre_post_threshold or post_rise < pre_post_threshold:
+                return None
+            close_threshold = vertical_threshold * 0.25
+            if close_drop < close_threshold or close_rise < close_threshold:
+                return None
+            if y < prev_close[1] or y < next_close[1]:
+                return None
+        else:
+            far_inflection = dy_in < -far_margin and dy_out < far_margin and (dy_out - dy_in) >= vertical_threshold
+            far_rebound = dy_in > -far_margin and dy_out < far_margin
+            if not far_inflection and not far_rebound:
+                return None
+            if far_inflection:
+                pattern = "far_inflection"
+                bounce_strength = max(dy_out - dy_in, pre_rise, post_rise, close_pre_rise + close_rise)
+                if pre_rise < vertical_threshold * 1.4 or post_rise < vertical_threshold * 0.7:
+                    return None
+                if close_pre_rise < vertical_threshold * 0.3 or close_rise < vertical_threshold * 0.15:
+                    return None
+            else:
+                pattern = "far_rebound"
+                bounce_strength = max(vertical_change, pre_drop + post_rise, close_drop + close_rise)
+                if pre_drop < vertical_threshold * 0.45 or post_rise < vertical_threshold * 0.45:
+                    return None
+                if close_drop < vertical_threshold * 0.10 or close_rise < vertical_threshold * 0.10:
+                    return None
 
         x_direction_consistent = (in_vec[0] == 0) or (out_vec[0] == 0) or (in_vec[0] * out_vec[0] >= 0)
-        if not x_direction_consistent and abs(in_vec[0] - out_vec[0]) > abs(vertical_change):
+        if not x_direction_consistent and abs(in_vec[0] - out_vec[0]) > max(abs(vertical_change), speed_in * 0.7):
             return None
 
         event = {
             "frame": candidate_frame,
-            "point": [int(x), int(y)],
+            "point": [int(round(x)), int(round(y))],
             "type": "bounce",
             "side": side,
+            "pattern": pattern,
             "vertical_change": round(vertical_change, 1),
+            "bounce_strength": round(bounce_strength, 1),
             "pre_drop": round(pre_drop, 1),
             "post_rise": round(post_rise, 1),
             "world_point": [round(world_point[0], 2), round(world_point[1], 2)] if world_point is not None else None,
@@ -523,16 +603,20 @@ class EventDetector:
         return "far" if point[1] < 540 else "near"
 
     def _near_contact_zone(self, point, players, rackets, side):
-        player_margin = self.player_hit_margin_px * (2.5 if side == "near" else 1.1)
-        racket_margin = self.racket_hit_margin_px * (2.2 if side == "near" else 1.2)
+        player_x_margin = max(16.0, self.player_hit_margin_px * (2.5 if side == "near" else 1.4))
+        player_y_margin = max(6.0, self.player_hit_margin_px * (0.8 if side == "near" else 0.6))
+        racket_margin = self.racket_hit_margin_px * (1.5 if side == "near" else 1.0)
 
         for player in players:
             x1, y1, x2, y2 = player["bbox"]
+            height = y2 - y1
+            upper_y1 = y1 + (height * 0.08)
+            upper_y2 = y1 + (height * self.player_hit_upper_body_ratio)
             zone = [
-                x1 - player_margin,
-                y1 - player_margin,
-                x2 + player_margin,
-                y2 + player_margin,
+                x1 - player_x_margin,
+                upper_y1 - player_y_margin,
+                x2 + player_x_margin,
+                upper_y2 + player_y_margin,
             ]
             if point_to_bbox_distance(point, zone) <= 0:
                 return True
@@ -540,6 +624,29 @@ class EventDetector:
             if point_to_bbox_distance(point, racket["bbox"]) <= racket_margin:
                 return True
         return False
+
+    def _trajectory_has_outlier(self, prev_points, point, next_points):
+        points = list(prev_points) + [point] + list(next_points)
+        steps = []
+        for p0, p1 in zip(points, points[1:]):
+            if p0 is None or p1 is None:
+                continue
+            steps.append(math.hypot(p1[0] - p0[0], p1[1] - p0[1]))
+        if len(steps) < 4:
+            return False
+        median_step = statistics.median(steps)
+        if median_step <= 0:
+            return False
+        max_step = max(steps)
+        return max_step > 72.0 and max_step > median_step * 1.7
+
+    def _distinct_point_count(self, points):
+        distinct = set()
+        for point in points:
+            if point is None:
+                continue
+            distinct.add((int(round(point[0])), int(round(point[1]))))
+        return len(distinct)
 
     def _record_event(self, event):
         self.event_frames.add(event["frame"])
@@ -640,13 +747,13 @@ def parse_args():
     parser.add_argument(
         "--bounce-min-vertical-change",
         type=float,
-        default=14.0,
+        default=12.0,
         help="Minimum vertical direction change in pixels to count as a bounce.",
     )
     parser.add_argument(
         "--bounce-min-gap-frames",
         type=int,
-        default=12,
+        default=8,
         help="Minimum frames between bounce markers.",
     )
     parser.add_argument(
@@ -664,25 +771,25 @@ def parse_args():
     parser.add_argument(
         "--player-hit-margin-px",
         type=int,
-        default=24,
+        default=8,
         help="Fallback player-box margin for classifying an event as a hit.",
     )
     parser.add_argument(
         "--racket-hit-margin-px",
         type=int,
-        default=30,
+        default=20,
         help="Classify an event near a racket box as a hit.",
     )
     parser.add_argument(
         "--event-min-travel",
         type=float,
-        default=18.0,
+        default=12.0,
         help="Minimum pre/post event travel in pixels required before creating a hit or bounce.",
     )
     parser.add_argument(
         "--player-hit-upper-body-ratio",
         type=float,
-        default=0.72,
+        default=0.50,
         help="Only the upper portion of a player box is eligible for hit classification.",
     )
     parser.add_argument(
@@ -973,13 +1080,6 @@ def main():
     if not os.path.exists(args.ball_model):
         raise FileNotFoundError(f"Ball model not found: {args.ball_model}")
 
-    court_calib = load_court_calibration(args.court_calib_file)
-    inv_court_homography = build_inverse_court_homography(court_calib)
-    fallback_net_y = None
-    if court_calib is not None and court_calib.get("net_points") is not None:
-        net_points = court_calib["net_points"]
-        fallback_net_y = (net_points[0][1] + net_points[1][1]) / 2.0
-
     ball_model = load_model(args.ball_model)
     scene_model = load_model(args.scene_model)
 
@@ -990,6 +1090,20 @@ def main():
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 0
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 0
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+
+    court_calib = load_court_calibration(args.court_calib_file)
+    if court_calib is not None and not calibration_fits_frame(court_calib, (height, width, 3)):
+        print(
+            f"Warning: ignoring court calibration {args.court_calib_file} because it does not fit "
+            f"the video frame {width}x{height}."
+        )
+        court_calib = None
+
+    inv_court_homography = build_inverse_court_homography(court_calib)
+    fallback_net_y = None
+    if court_calib is not None and court_calib.get("net_points") is not None:
+        net_points = court_calib["net_points"]
+        fallback_net_y = (net_points[0][1] + net_points[1][1]) / 2.0
 
     writer = None
     if args.output:
