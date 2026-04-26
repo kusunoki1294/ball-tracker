@@ -13,6 +13,11 @@ Current status
   - bounce detection
   - far-side bounce detection
   - separating true bounces from player or racket contact points
+- Current real-world result on `yoloVids/tennis6.MOV`:
+  - about 5 bounces are detected total
+  - near-side bounces can be found
+  - far-side bounces are still effectively 0
+  - this is still far short of the expected 20+ bounce/contact events in the rally footage
 
 Files
 - `track_ball.py`: original tracker with HSV/motion and optional YOLO support
@@ -125,6 +130,9 @@ What was added to `track_ball_yolo.py`
 10. Mini singles-court overlay
    - draws a small singles court in the top-right corner
    - plots the current ball position and recent bounce markers when calibration is available
+   - current state is still not correct for `tennis6`
+   - mapping improved after replacing the stale calibration file, but the mini-map orientation is still flipped
+   - the near side is still appearing at the top of the mini-map, which is backwards for this camera view
 
 Important YOLO-only options
 Main detection options
@@ -187,6 +195,29 @@ YOLO-only tracker
 - Some player-contact points can still be mislabeled as bounces.
 - The script is not currently trying to show hit markers.
 - The mini court overlay depends on court calibration quality; bad calibration will place mapped points incorrectly.
+- Even with the new `tennis6` calibration, the mini-map orientation is still backwards:
+  - near side is shown on the top half
+  - far side is shown on the bottom half
+- Bounce mapping is still not trustworthy enough to use as a source of truth for side classification.
+- Current detector behavior on `tennis6` is roughly:
+  - around 5 detected bounces total
+  - 0 far-side bounces
+  - still much lower than the expected number of bounce/contact moments in the clip
+
+Latest calibration/debug notes
+- The old `court_calib.json` was invalid for `tennis6` because its coordinates were outside the `1280x720` frame.
+- That stale calibration was replaced with a `tennis6`-specific calibration fitted to the actual visible doubles court.
+- The projected court overlay from that replacement calibration looked visually plausible on the extracted frame.
+- Despite that, the runtime mini-map is still oriented incorrectly, so the world-to-mini-court convention is still wrong somewhere in `track_ball_yolo.py`.
+- Because the mini-map and side classification are coupled through projected court coordinates, far-side bounce logic should not be trusted until that orientation issue is fixed.
+
+Immediate next step
+- Fix the mini-court/world-coordinate orientation in `track_ball_yolo.py` so:
+  - far court is the top half of the mini-map
+  - near court is the bottom half of the mini-map
+  - mapped bounce points land in the correct service box / lateral lane
+- After the map orientation is correct, retune far-side bounce detection.
+- Do not spend more time tuning bounce thresholds until the court-world mapping is verified correct during an actual `tennis6` render.
 
 Environment issues encountered
 - Ultralytics `track()` pulled in a missing `lap` dependency, so the YOLO-only script uses a custom simple tracker instead.
@@ -197,7 +228,7 @@ Recommended workflow
 1. Edit `track_ball_yolo.py`.
 2. Run on:
 
-   python track_ball_yolo.py --video yoloVids/tennis6.MOV --output yoloVids/test_output.avi --headless
+   .venv/bin/python track_ball_yolo.py --video yoloVids/tennis6.MOV --output yoloVids/test_output.avi --court-calib-file=court_calib.json --headless
 
 3. Open the result:
 
@@ -209,6 +240,9 @@ Recommended workflow
    - false bounce markers
    - missed near/far bounces
    - mini court overlay placement
+   - whether the mini-map is upside down
+   - whether near-side bounces map to the lower half
+   - whether far-side bounces map to the upper half
 
 5. Tune one problem at a time.
 
@@ -217,3 +251,5 @@ Current takeaway
 - Far-ball tracking needed special handling because of the wide-angle phone footage.
 - Bounce marking is still experimental and should not be treated as correct yet.
 - Hit detection is intentionally disabled for now while bounce quality is being improved.
+- The next concrete task is not generic bounce tuning.
+- The next concrete task is fixing the court-world / mini-map orientation bug and then revisiting far-side bounce detection.

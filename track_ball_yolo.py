@@ -121,16 +121,117 @@ class MovingBallFilter:
             history.append(tuple(det["center"]))
 
             if len(history) < 2:
+                if self._bootstrap_detection(det):
+                    filtered.append(det)
                 continue
 
             start_x, start_y = history[0]
             end_x, end_y = history[-1]
             travel = math.hypot(end_x - start_x, end_y - start_y)
-            if travel >= self.min_travel_px:
+            if travel >= self._travel_threshold(det):
                 filtered.append(det)
 
         self.histories = {track_id: self.histories[track_id] for track_id in active_ids if track_id in self.histories}
         return filtered
+
+    def _bootstrap_detection(self, det):
+        conf = det.get("conf") or 0.0
+        x1, y1, x2, y2 = det["bbox"]
+        height = y2 - y1
+        return conf >= 0.55 and height <= 16
+
+    def _travel_threshold(self, det):
+        center_y = det["center"][1]
+        threshold = self.min_travel_px
+        if center_y < 420:
+            threshold *= 0.45
+        elif center_y < 520:
+            threshold *= 0.7
+        return max(3.0, threshold)
+
+
+class BallSelector:
+    def __init__(self):
+        self.last_ball = None
+        self.prev_ball = None
+        self.missed_frames = 0
+
+    def select(self, ball_detections):
+        if not ball_detections:
+            self.missed_frames += 1
+            if self.missed_frames > 2:
+                self.prev_ball = self.last_ball
+                self.last_ball = None
+            return None
+
+        if self.last_ball is None:
+            chosen = max(ball_detections, key=self._initial_score)
+            self._record(chosen)
+            return chosen
+
+        predicted = self._predicted_center()
+        chosen = max(ball_detections, key=lambda det: self._tracking_score(det, predicted))
+        self._record(chosen)
+        return chosen
+
+    def _record(self, ball):
+        self.prev_ball = self.last_ball
+        self.last_ball = ball
+        self.missed_frames = 0
+
+    def _predicted_center(self):
+        last_center = tuple(self.last_ball["center"])
+        if self.prev_ball is None:
+            return last_center
+        prev_center = tuple(self.prev_ball["center"])
+        vx = last_center[0] - prev_center[0]
+        vy = last_center[1] - prev_center[1]
+        return (last_center[0] + vx, last_center[1] + vy)
+
+    def _initial_score(self, det):
+        height = det["bbox"][3] - det["bbox"][1]
+        conf = det.get("conf") or 0.0
+        score = conf * 150.0 + min(height, 16) * 1.5
+        if det["center"][1] < 420:
+            score += 12.0
+        return score
+
+    def _tracking_score(self, det, predicted):
+        center = tuple(det["center"])
+        conf = det.get("conf") or 0.0
+        height = det["bbox"][3] - det["bbox"][1]
+        distance = math.hypot(center[0] - predicted[0], center[1] - predicted[1])
+
+        score = conf * 140.0 + min(height, 16) * 1.5
+        distance_penalty = 0.95
+        if predicted[1] < 420 and center[1] < 420:
+            distance_penalty = 0.42
+        score -= distance * distance_penalty
+
+        if det.get("track_id") is not None and det.get("track_id") == self.last_ball.get("track_id"):
+            score += 32.0
+            if distance < 90.0:
+                score += 14.0
+
+        if self.prev_ball is not None:
+            last_center = tuple(self.last_ball["center"])
+            prev_center = tuple(self.prev_ball["center"])
+            pred_vx = last_center[0] - prev_center[0]
+            pred_vy = last_center[1] - prev_center[1]
+            cand_vx = center[0] - last_center[0]
+            cand_vy = center[1] - last_center[1]
+            pred_speed = math.hypot(pred_vx, pred_vy)
+            cand_speed = math.hypot(cand_vx, cand_vy)
+            if pred_speed > 1.0 and cand_speed > 1.0:
+                alignment = ((pred_vx * cand_vx) + (pred_vy * cand_vy)) / (pred_speed * cand_speed)
+                score += alignment * (24.0 if center[1] < 420 else 16.0)
+                if alignment < -0.35:
+                    score -= 18.0
+
+        if center[1] < 420:
+            score += 10.0
+
+        return score
 
 
 def point_to_bbox_distance(point, bbox):
@@ -139,6 +240,23 @@ def point_to_bbox_distance(point, bbox):
     dx = max(x1 - x, 0, x - x2)
     dy = max(y1 - y, 0, y - y2)
     return math.hypot(dx, dy)
+
+
+def point_to_segment_distance(point, segment_start, segment_end):
+    px, py = point
+    ax, ay = segment_start
+    bx, by = segment_end
+    abx = bx - ax
+    aby = by - ay
+    apx = px - ax
+    apy = py - ay
+    denom = abx * abx + aby * aby
+    if denom <= 0:
+        return math.hypot(px - ax, py - ay)
+    u = max(0.0, min(1.0, (apx * abx + apy * aby) / denom))
+    qx = ax + (u * abx)
+    qy = ay + (u * aby)
+    return math.hypot(px - qx, py - qy)
 
 
 def average_point(points):
@@ -373,6 +491,7 @@ class EventDetector:
         bounce_min_y_ratio,
         inv_court_homography,
         fallback_net_y,
+        net_segment,
     ):
         self.bounce_min_vertical_change = bounce_min_vertical_change
         self.bounce_min_gap_frames = bounce_min_gap_frames
@@ -388,6 +507,7 @@ class EventDetector:
         self.bounce_min_y_ratio = bounce_min_y_ratio
         self.inv_court_homography = inv_court_homography
         self.fallback_net_y = fallback_net_y
+        self.net_segment = net_segment
         self.history = deque(maxlen=11)
         self.last_bounce_frame = -10**9
         self.events = []
@@ -409,9 +529,15 @@ class EventDetector:
         if len(self.history) < 9:
             return None
 
-        candidate_index = len(self.history) // 2
-        event = self._evaluate_candidate(candidate_index, frame_shape)
-        return event
+        best_event = None
+        candidate_indexes = range(3, len(self.history) - 3)
+        for candidate_index in candidate_indexes:
+            event = self._evaluate_candidate(candidate_index, frame_shape)
+            if event is None:
+                continue
+            if best_event is None or event["bounce_strength"] > best_event["bounce_strength"]:
+                best_event = event
+        return best_event
 
     def _evaluate_candidate(self, index, frame_shape):
         history_items = list(self.history)
@@ -433,8 +559,6 @@ class EventDetector:
         next_valid = [point for point in next_points if point is not None]
         if len(prev_valid) < 2 or len(next_valid) < 2:
             return None
-        if self._distinct_point_count(prev_valid) < 3 or self._distinct_point_count(next_valid) < 3:
-            return None
 
         p0 = average_point(prev_points)
         p1 = center_item["ball"]
@@ -450,6 +574,11 @@ class EventDetector:
         contact_point = center_item["ball_contact"]
         prev_contact_close = next((point for point in reversed(prev_contact_points) if point is not None), None)
         next_contact_close = next((point for point in next_contact_points if point is not None), None)
+        world_point = project_to_court_world(contact_point or p1, self.inv_court_homography)
+        side = self._classify_court_side(p1, world_point)
+        min_distinct = 3 if side == "near" else 2
+        if self._distinct_point_count(prev_valid) < min_distinct or self._distinct_point_count(next_valid) < min_distinct:
+            return None
 
         in_vec = (p1[0] - p0[0], p1[1] - p0[1])
         out_vec = (p2[0] - p1[0], p2[1] - p1[1])
@@ -471,6 +600,8 @@ class EventDetector:
             prev_close=prev_close,
             next_close=next_close,
             contact_point=contact_point,
+            world_point=world_point,
+            side=side,
             prev_contact_close=prev_contact_close,
             next_contact_close=next_contact_close,
         )
@@ -492,18 +623,15 @@ class EventDetector:
         prev_close,
         next_close,
         contact_point,
+        world_point,
+        side,
         prev_contact_close,
         next_contact_close,
     ):
         if candidate_frame - self.last_bounce_frame < self.bounce_min_gap_frames:
             return None
 
-        if self._trajectory_has_outlier(prev_points, point, next_points):
-            return None
-
         contact_point = contact_point or point
-        world_point = project_to_court_world(contact_point, self.inv_court_homography)
-        side = self._classify_court_side(point, world_point)
         if world_point is not None:
             court_margin = 0.75
             if not world_point_in_court(world_point, margin=court_margin):
@@ -516,6 +644,13 @@ class EventDetector:
             return None
         min_y_ratio = self.bounce_min_y_ratio if side == "near" else self.bounce_min_y_ratio * 0.45
         if y < max(y_margin, frame_h * min_y_ratio) or y > frame_h - y_margin:
+            return None
+
+        net_distance_px = self._net_distance_px(contact_point)
+        if self._near_net_corridor(side, world_point, net_distance_px):
+            return None
+
+        if self._trajectory_has_outlier(side, prev_points, point, next_points):
             return None
 
         if self._near_contact_zone(contact_point, players, rackets, side):
@@ -535,7 +670,7 @@ class EventDetector:
         vertical_change = dy_in - dy_out
         speed_in = math.hypot(in_vec[0], in_vec[1])
         speed_out = math.hypot(out_vec[0], out_vec[1])
-        travel_threshold = self.min_event_travel if side == "near" else self.min_event_travel * 0.4
+        travel_threshold = self.min_event_travel if side == "near" else self.min_event_travel * 0.28
         vertical_threshold = self.bounce_min_vertical_change if side == "near" else self.bounce_min_vertical_change * 0.4
         far_margin = max(2.0, vertical_threshold * 0.35)
         if speed_in < travel_threshold or speed_out < travel_threshold:
@@ -556,9 +691,20 @@ class EventDetector:
             if y < prev_close[1] or y < next_close[1]:
                 return None
         else:
+            if y < prev_close[1] or y < next_close[1]:
+                return None
             far_inflection = dy_in < -far_margin and dy_out < far_margin and (dy_out - dy_in) >= vertical_threshold
             far_rebound = dy_in > -far_margin and dy_out < far_margin
-            if not far_inflection and not far_rebound:
+            far_entry = False
+            if world_point is not None and 6.0 <= world_point[1] <= 35.5 and net_distance_px is not None and net_distance_px >= 18.0:
+                far_entry = (
+                    dy_in < -2.0
+                    and pre_rise >= vertical_threshold * 2.2
+                    and post_rise >= vertical_threshold * 0.55
+                    and speed_in >= travel_threshold * 1.15
+                    and speed_out >= travel_threshold * 0.95
+                )
+            if not far_inflection and not far_rebound and not far_entry:
                 return None
             if far_inflection:
                 pattern = "far_inflection"
@@ -566,6 +712,11 @@ class EventDetector:
                 if pre_rise < vertical_threshold * 1.4 or post_rise < vertical_threshold * 0.7:
                     return None
                 if close_pre_rise < vertical_threshold * 0.3 or close_rise < vertical_threshold * 0.15:
+                    return None
+            elif far_entry:
+                pattern = "far_entry"
+                bounce_strength = max(pre_rise, post_rise, dy_out - dy_in, close_pre_rise + close_rise)
+                if close_pre_rise < vertical_threshold * 0.2:
                     return None
             else:
                 pattern = "far_rebound"
@@ -576,7 +727,8 @@ class EventDetector:
                     return None
 
         x_direction_consistent = (in_vec[0] == 0) or (out_vec[0] == 0) or (in_vec[0] * out_vec[0] >= 0)
-        if not x_direction_consistent and abs(in_vec[0] - out_vec[0]) > max(abs(vertical_change), speed_in * 0.7):
+        x_change_limit = max(abs(vertical_change) * (1.25 if side == "near" else 1.0), speed_in * (1.05 if side == "near" else 0.7))
+        if not x_direction_consistent and abs(in_vec[0] - out_vec[0]) > x_change_limit:
             return None
 
         event = {
@@ -603,15 +755,20 @@ class EventDetector:
         return "far" if point[1] < 540 else "near"
 
     def _near_contact_zone(self, point, players, rackets, side):
-        player_x_margin = max(16.0, self.player_hit_margin_px * (2.5 if side == "near" else 1.4))
-        player_y_margin = max(6.0, self.player_hit_margin_px * (0.8 if side == "near" else 0.6))
+        player_x_margin = max(10.0, self.player_hit_margin_px * (1.15 if side == "near" else 1.4))
+        player_y_margin = max(4.0, self.player_hit_margin_px * (0.45 if side == "near" else 0.6))
         racket_margin = self.racket_hit_margin_px * (1.5 if side == "near" else 1.0)
 
         for player in players:
             x1, y1, x2, y2 = player["bbox"]
             height = y2 - y1
-            upper_y1 = y1 + (height * 0.08)
-            upper_y2 = y1 + (height * self.player_hit_upper_body_ratio)
+            upper_y1 = y1 + (height * (0.12 if side == "near" else 0.08))
+            upper_ratio = self.player_hit_upper_body_ratio
+            if side == "near":
+                upper_ratio = min(0.22, self.player_hit_upper_body_ratio * 0.48)
+                if point[1] >= y1 + (height * 0.28):
+                    continue
+            upper_y2 = y1 + (height * upper_ratio)
             zone = [
                 x1 - player_x_margin,
                 upper_y1 - player_y_margin,
@@ -621,11 +778,28 @@ class EventDetector:
             if point_to_bbox_distance(point, zone) <= 0:
                 return True
         for racket in rackets:
+            if side == "near":
+                _rx1, ry1, _rx2, ry2 = racket["bbox"]
+                if point[1] > ((ry1 + ry2) * 0.5) + 6.0:
+                    continue
             if point_to_bbox_distance(point, racket["bbox"]) <= racket_margin:
                 return True
         return False
 
-    def _trajectory_has_outlier(self, prev_points, point, next_points):
+    def _near_net_corridor(self, side, world_point, net_distance_px):
+        if world_point is None or net_distance_px is None:
+            return False
+        xw, yw = world_point
+        if side == "near":
+            return 38.0 <= yw <= 46.0 and net_distance_px <= 12.0
+        return 30.0 <= yw <= 40.5 and net_distance_px <= 14.0
+
+    def _net_distance_px(self, point):
+        if point is None or self.net_segment is None:
+            return None
+        return point_to_segment_distance(point, self.net_segment[0], self.net_segment[1])
+
+    def _trajectory_has_outlier(self, side, prev_points, point, next_points):
         points = list(prev_points) + [point] + list(next_points)
         steps = []
         for p0, p1 in zip(points, points[1:]):
@@ -638,7 +812,9 @@ class EventDetector:
         if median_step <= 0:
             return False
         max_step = max(steps)
-        return max_step > 72.0 and max_step > median_step * 1.7
+        if side == "near":
+            return max_step > 180.0 and max_step > median_step * 3.1
+        return max_step > 95.0 and max_step > median_step * 2.3
 
     def _distinct_point_count(self, points):
         distinct = set()
@@ -675,7 +851,7 @@ def parse_args():
         default="yolov8n.pt",
         help="YOLO model path for players and other scene objects.",
     )
-    parser.add_argument("--ball-conf", type=float, default=0.15, help="Ball confidence threshold.")
+    parser.add_argument("--ball-conf", type=float, default=0.12, help="Ball confidence threshold.")
     parser.add_argument("--scene-conf", type=float, default=0.25, help="Scene confidence threshold.")
     parser.add_argument("--imgsz", type=int, default=960, help="YOLO inference size.")
     parser.add_argument("--device", default="", help="YOLO device, such as cpu, mps, 0.")
@@ -723,19 +899,19 @@ def parse_args():
     parser.add_argument(
         "--far-ball-roi-height",
         type=float,
-        default=0.58,
+        default=0.66,
         help="Fraction of frame height used for a high-resolution far-court ball pass.",
     )
     parser.add_argument(
         "--far-ball-roi-width",
         type=float,
-        default=0.82,
+        default=0.96,
         help="Fraction of frame width used for a high-resolution far-court ball pass.",
     )
     parser.add_argument(
         "--far-ball-conf",
         type=float,
-        default=0.10,
+        default=0.08,
         help="Confidence threshold for the far-court ball pass.",
     )
     parser.add_argument(
@@ -972,10 +1148,30 @@ def detect_ball_candidates(frame, model, args):
     return dedupe_ball_detections(detections)
 
 
-def select_ball(ball_detections):
-    if not ball_detections:
-        return None
-    return max(ball_detections, key=lambda det: (det["conf"] or 0.0, det["bbox"][3] - det["bbox"][1]))
+def scene_ball_candidates(scene_detections):
+    candidates = []
+    for det in scene_detections:
+        if det.get("class_name") != "sports ball":
+            continue
+        x1, y1, x2, y2 = det["bbox"]
+        height = y2 - y1
+        width = x2 - x1
+        conf = det.get("conf") or 0.0
+        if width > 28 or height > 28:
+            continue
+        if conf < 0.16:
+            continue
+        candidates.append(
+            {
+                "track_id": None,
+                "class_id": 0,
+                "class_name": "tennis-ball",
+                "conf": conf,
+                "bbox": det["bbox"],
+                "center": det["center"],
+            }
+        )
+    return candidates
 
 
 def split_players(scene_detections):
@@ -1101,9 +1297,11 @@ def main():
 
     inv_court_homography = build_inverse_court_homography(court_calib)
     fallback_net_y = None
+    net_segment = None
     if court_calib is not None and court_calib.get("net_points") is not None:
         net_points = court_calib["net_points"]
         fallback_net_y = (net_points[0][1] + net_points[1][1]) / 2.0
+        net_segment = (tuple(net_points[0]), tuple(net_points[1]))
 
     writer = None
     if args.output:
@@ -1122,6 +1320,7 @@ def main():
         history_frames=max(2, args.ball_motion_history),
         min_travel_px=args.ball_min_travel,
     )
+    ball_selector = BallSelector()
     event_detector = EventDetector(
         bounce_min_vertical_change=args.bounce_min_vertical_change,
         bounce_min_gap_frames=max(1, args.bounce_min_gap_frames),
@@ -1137,6 +1336,7 @@ def main():
         bounce_min_y_ratio=max(0.0, min(1.0, args.bounce_min_y_ratio)),
         inv_court_homography=inv_court_homography,
         fallback_net_y=fallback_net_y,
+        net_segment=net_segment,
     )
     scene_tracker = SimpleTracker(max_distance=args.object_max_distance)
     frame_index = 0
@@ -1155,11 +1355,14 @@ def main():
             device=args.device,
             tracker=args.tracker,
         )
-        scene_detections = scene_tracker.update(extract_detections(scene_result))
-        ball_detections = ball_tracker.update(detect_ball_candidates(frame, ball_model, args))
+        scene_raw_detections = extract_detections(scene_result)
+        scene_detections = scene_tracker.update(scene_raw_detections)
+        ball_candidates = detect_ball_candidates(frame, ball_model, args)
+        ball_candidates.extend(scene_ball_candidates(scene_raw_detections))
+        ball_detections = ball_tracker.update(dedupe_ball_detections(ball_candidates))
         ball_detections = ball_filter.filter(ball_detections)
         ball_detections = moving_ball_filter.filter(ball_detections)
-        ball = select_ball(ball_detections)
+        ball = ball_selector.select(ball_detections)
         near_player, far_player, other_objects = split_players(scene_detections)
         racket_detections = [det for det in scene_detections if det["class_name"] == "tennis racket"]
         event = event_detector.update(
