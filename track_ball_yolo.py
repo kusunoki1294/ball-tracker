@@ -765,6 +765,14 @@ class EventDetector:
             upper_y1 = y1 + (height * (0.12 if side == "near" else 0.08))
             upper_ratio = self.player_hit_upper_body_ratio
             if side == "near":
+                strike_zone = [
+                    x1 - 14.0,
+                    y1 + (height * 0.08),
+                    x2 + 28.0,
+                    y1 + (height * 0.38),
+                ]
+                if point_to_bbox_distance(point, strike_zone) <= 0:
+                    return True
                 upper_ratio = min(0.22, self.player_hit_upper_body_ratio * 0.48)
                 if point[1] >= y1 + (height * 0.28):
                     continue
@@ -778,10 +786,6 @@ class EventDetector:
             if point_to_bbox_distance(point, zone) <= 0:
                 return True
         for racket in rackets:
-            if side == "near":
-                _rx1, ry1, _rx2, ry2 = racket["bbox"]
-                if point[1] > ((ry1 + ry2) * 0.5) + 6.0:
-                    continue
             if point_to_bbox_distance(point, racket["bbox"]) <= racket_margin:
                 return True
         return False
