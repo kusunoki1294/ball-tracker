@@ -86,19 +86,57 @@ class StationaryTrackFilter:
             active_ids.add(track_id)
             center = det["center"]
             state = self.states.get(track_id)
+            movement_threshold = self._movement_threshold(det)
+            static_frame_limit = self._static_frame_limit(det)
             if state is None:
-                self.states[track_id] = {"center": center, "static_count": 0}
+                self.states[track_id] = {"anchor_center": center, "last_center": center, "static_count": 0}
                 filtered.append(det)
                 continue
 
-            distance = math.hypot(center[0] - state["center"][0], center[1] - state["center"][1])
-            static_count = state["static_count"] + 1 if distance <= self.movement_px else 0
-            self.states[track_id] = {"center": center, "static_count": static_count}
-            if static_count < self.static_frames:
+            anchor_center = state["anchor_center"]
+            anchor_distance = math.hypot(center[0] - anchor_center[0], center[1] - anchor_center[1])
+            if anchor_distance <= movement_threshold:
+                static_count = state["static_count"] + 1
+                next_state = {
+                    "anchor_center": anchor_center,
+                    "last_center": center,
+                    "static_count": static_count,
+                }
+            else:
+                static_count = 0
+                next_state = {
+                    "anchor_center": center,
+                    "last_center": center,
+                    "static_count": static_count,
+                }
+            self.states[track_id] = next_state
+            if static_count < static_frame_limit:
                 filtered.append(det)
 
         self.states = {track_id: self.states[track_id] for track_id in active_ids if track_id in self.states}
         return filtered
+
+    def _movement_threshold(self, det):
+        threshold = self.movement_px
+        center_y = det["center"][1]
+        bbox = det.get("bbox") or [0, 0, 0, 0]
+        height = max(0, bbox[3] - bbox[1])
+        if center_y < 420 or height <= 14:
+            threshold *= 0.45
+        elif center_y < 520 or height <= 22:
+            threshold *= 0.7
+        return max(1.5, threshold)
+
+    def _static_frame_limit(self, det):
+        limit = self.static_frames
+        center_y = det["center"][1]
+        bbox = det.get("bbox") or [0, 0, 0, 0]
+        height = max(0, bbox[3] - bbox[1])
+        if center_y < 420 or height <= 14:
+            limit = int(round(limit * 1.6))
+        elif center_y < 520 or height <= 22:
+            limit = int(round(limit * 1.25))
+        return max(2, limit)
 
 
 class MovingBallFilter:
@@ -106,10 +144,19 @@ class MovingBallFilter:
         self.history_frames = history_frames
         self.min_travel_px = min_travel_px
         self.histories = {}
+        self.last_debug = {}
 
     def filter(self, detections):
         active_ids = set()
         filtered = []
+        debug = {
+            "input_count": len(detections),
+            "passed_bootstrap": 0,
+            "passed_excursion": 0,
+            "passed_seed_bypass": 0,
+            "rejected_short_history": 0,
+            "rejected_low_excursion": 0,
+        }
 
         for det in detections:
             track_id = det.get("track_id")
@@ -122,16 +169,27 @@ class MovingBallFilter:
 
             if len(history) < 2:
                 if self._bootstrap_detection(det):
-                    filtered.append(det)
+                    filtered.append({**det, "motion_gate": "bootstrap"})
+                    debug["passed_bootstrap"] += 1
+                else:
+                    debug["rejected_short_history"] += 1
                 continue
 
-            start_x, start_y = history[0]
-            end_x, end_y = history[-1]
-            travel = math.hypot(end_x - start_x, end_y - start_y)
-            if travel >= self._travel_threshold(det):
-                filtered.append(det)
+            excursion = self._history_excursion(history)
+            if excursion >= self._travel_threshold(det):
+                filtered.append({**det, "motion_gate": "excursion"})
+                debug["passed_excursion"] += 1
+            elif self._seed_bypass_allowed(det, history, excursion):
+                filtered.append({**det, "motion_gate": "seed_bypass"})
+                debug["passed_seed_bypass"] += 1
+            else:
+                debug["rejected_low_excursion"] += 1
 
         self.histories = {track_id: self.histories[track_id] for track_id in active_ids if track_id in self.histories}
+        self.last_debug = {
+            **debug,
+            "output_count": len(filtered),
+        }
         return filtered
 
     def _bootstrap_detection(self, det):
@@ -143,35 +201,172 @@ class MovingBallFilter:
     def _travel_threshold(self, det):
         center_y = det["center"][1]
         threshold = self.min_travel_px
-        if center_y < 420:
-            threshold *= 0.45
-        elif center_y < 520:
-            threshold *= 0.7
-        return max(3.0, threshold)
+        bbox = det.get("bbox") or [0, 0, 0, 0]
+        height = max(0, bbox[3] - bbox[1])
+        if center_y < 420 or height <= 14:
+            threshold *= 0.32
+        elif center_y < 520 or height <= 22:
+            threshold *= 0.55
+        return max(2.0, threshold)
+
+    def _history_excursion(self, history):
+        if len(history) < 2:
+            return 0.0
+        max_distance = 0.0
+        points = list(history)
+        for i, (x0, y0) in enumerate(points):
+            for x1, y1 in points[i + 1 :]:
+                max_distance = max(max_distance, math.hypot(x1 - x0, y1 - y0))
+        return max_distance
+
+    def _seed_bypass_allowed(self, det, history, excursion):
+        if len(history) < 2:
+            return False
+        center_y = det["center"][1]
+        bbox = det.get("bbox") or [0, 0, 0, 0]
+        height = max(0, bbox[3] - bbox[1])
+        conf = det.get("conf") or 0.0
+        if center_y >= 520 and height > 22:
+            return False
+        if conf < 0.20:
+            return False
+        if self._distinct_point_count(history) < 2:
+            return False
+        return excursion >= self._seed_bypass_threshold(det)
+
+    def _seed_bypass_threshold(self, det):
+        center_y = det["center"][1]
+        bbox = det.get("bbox") or [0, 0, 0, 0]
+        height = max(0, bbox[3] - bbox[1])
+        threshold = self._travel_threshold(det)
+        if center_y < 420 or height <= 14:
+            return max(1.75, threshold * 0.45)
+        return max(2.5, threshold * 0.55)
+
+    def _distinct_point_count(self, history):
+        distinct = set()
+        for point in history:
+            distinct.add((int(round(point[0])), int(round(point[1]))))
+        return len(distinct)
 
 
 class BallSelector:
-    def __init__(self):
+    def __init__(self, seed_confirm_frames=2, seed_min_travel_px=4.0, seed_match_distance=90.0, pending_miss_tolerance=1):
         self.last_ball = None
         self.prev_ball = None
         self.missed_frames = 0
+        self.seed_confirm_frames = max(1, int(seed_confirm_frames))
+        self.seed_min_travel_px = max(0.0, float(seed_min_travel_px))
+        self.seed_match_distance = max(1.0, float(seed_match_distance))
+        self.pending_miss_tolerance = max(0, int(pending_miss_tolerance))
+        self.pending_ball = None
+        self.pending_seen_frames = 0
+        self.pending_missed_frames = 0
+        self.pending_history = deque(maxlen=max(2, self.seed_confirm_frames + self.pending_miss_tolerance + 1))
+        self.last_debug = {}
 
     def select(self, ball_detections):
+        self.last_debug = {
+            "mode": "track" if self.last_ball is not None else "seed",
+            "candidate_count": len(ball_detections),
+            "missed_frames_before": self.missed_frames,
+            "active_track_id": self.last_ball.get("track_id") if self.last_ball is not None else None,
+        }
+
         if not ball_detections:
             self.missed_frames += 1
             if self.missed_frames > 2:
                 self.prev_ball = self.last_ball
                 self.last_ball = None
+            reason = "no_candidates"
+            if self.last_ball is None and self.pending_ball is not None:
+                self.pending_missed_frames += 1
+                reason = "seed_pending_miss"
+                if self.pending_missed_frames > self.pending_miss_tolerance:
+                    self._clear_pending()
+                    reason = "seed_pending_expired"
+            self.last_debug.update(
+                {
+                    "decision": "no_ball",
+                    "reason": reason,
+                    "missed_frames_after": self.missed_frames,
+                    "pending": self._pending_debug(),
+                }
+            )
             return None
 
         if self.last_ball is None:
-            chosen = max(ball_detections, key=self._initial_score)
+            ranked = sorted(
+                ((det, self._initial_score(det)) for det in ball_detections),
+                key=lambda item: item[1],
+                reverse=True,
+            )
+            chosen, chosen_score = ranked[0]
+            matched_pending = self._pending_matches(chosen)
+            if matched_pending:
+                self.pending_seen_frames += 1
+            else:
+                self.pending_seen_frames = 1
+                self.pending_missed_frames = 0
+                self.pending_history.clear()
+            self.pending_ball = chosen
+            self.pending_missed_frames = 0
+            self.pending_history.append(tuple(chosen["center"]))
+            pending_travel = self._pending_travel()
+            pending_threshold = self._seed_travel_threshold(chosen)
+            pending_confirm_frames = self._seed_confirm_frames_required(chosen)
+
+            self.last_debug.update(
+                {
+                    "top_candidates": self._candidate_debug(ranked),
+                    "selected_candidate": self._candidate_entry(chosen, chosen_score),
+                    "pending": self._pending_debug(
+                        travel=pending_travel,
+                        travel_threshold=pending_threshold,
+                        confirm_frames=pending_confirm_frames,
+                    ),
+                }
+            )
+
+            if self.pending_seen_frames < pending_confirm_frames:
+                self.last_debug.update({"decision": "pending", "reason": "seed_wait_confirm"})
+                return None
+            if pending_travel < pending_threshold:
+                self.last_debug.update({"decision": "pending", "reason": "seed_wait_travel"})
+                return None
+
             self._record(chosen)
+            self._clear_pending()
+            self.last_debug.update({"decision": "selected", "reason": "seed_confirmed"})
             return chosen
 
         predicted = self._predicted_center()
-        chosen = max(ball_detections, key=lambda det: self._tracking_score(det, predicted))
+        ranked = sorted(
+            ((det, self._tracking_score(det, predicted)) for det in ball_detections),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        chosen, chosen_score = ranked[0]
+        self.last_debug.update(
+            {
+                "predicted_center": [int(round(predicted[0])), int(round(predicted[1]))],
+                "top_candidates": self._candidate_debug(ranked),
+                "selected_candidate": self._candidate_entry(chosen, chosen_score),
+            }
+        )
+        if self._reject_far_jump(chosen, predicted):
+            self.missed_frames += 1
+            self.last_debug.update(
+                {
+                    "decision": "no_ball",
+                    "reason": "far_jump_rejected",
+                    "missed_frames_after": self.missed_frames,
+                }
+            )
+            return None
+        self._clear_pending()
         self._record(chosen)
+        self.last_debug.update({"decision": "selected", "reason": "tracked"})
         return chosen
 
     def _record(self, ball):
@@ -201,12 +396,20 @@ class BallSelector:
         conf = det.get("conf") or 0.0
         height = det["bbox"][3] - det["bbox"][1]
         distance = math.hypot(center[0] - predicted[0], center[1] - predicted[1])
+        pred_far_side = predicted[1] < 420 and center[1] < 420
 
         score = conf * 140.0 + min(height, 16) * 1.5
         distance_penalty = 0.95
-        if predicted[1] < 420 and center[1] < 420:
+        if pred_far_side:
             distance_penalty = 0.42
         score -= distance * distance_penalty
+
+        if pred_far_side and distance > 42.0:
+            score -= (distance - 42.0) * 1.35
+        if pred_far_side and conf < 0.4 and distance > 58.0:
+            score -= 55.0
+        if pred_far_side and conf < 0.25 and distance > 46.0:
+            score -= 90.0
 
         if det.get("track_id") is not None and det.get("track_id") == self.last_ball.get("track_id"):
             score += 32.0
@@ -232,6 +435,89 @@ class BallSelector:
             score += 10.0
 
         return score
+
+    def _reject_far_jump(self, det, predicted):
+        center = tuple(det["center"])
+        conf = det.get("conf") or 0.0
+        if predicted[1] >= 420 or center[1] >= 420:
+            return False
+        distance = math.hypot(center[0] - predicted[0], center[1] - predicted[1])
+        if conf < 0.25 and distance > 46.0:
+            return True
+        if conf < 0.35 and distance > 62.0:
+            return True
+        return False
+
+    def _clear_pending(self):
+        self.pending_ball = None
+        self.pending_seen_frames = 0
+        self.pending_missed_frames = 0
+        self.pending_history.clear()
+
+    def _pending_matches(self, det):
+        if self.pending_ball is None:
+            return False
+        pending_track_id = self.pending_ball.get("track_id")
+        track_id = det.get("track_id")
+        if pending_track_id is not None and track_id is not None and pending_track_id == track_id:
+            return True
+        pending_center = tuple(self.pending_ball["center"])
+        center = tuple(det["center"])
+        return math.hypot(center[0] - pending_center[0], center[1] - pending_center[1]) <= self.seed_match_distance
+
+    def _pending_travel(self):
+        if len(self.pending_history) < 2:
+            return 0.0
+        start_x, start_y = self.pending_history[0]
+        end_x, end_y = self.pending_history[-1]
+        return math.hypot(end_x - start_x, end_y - start_y)
+
+    def _pending_debug(self, travel=None, travel_threshold=None, confirm_frames=None):
+        if self.pending_ball is None:
+            return None
+        return {
+            "track_id": self.pending_ball.get("track_id"),
+            "center": list(self.pending_ball["center"]),
+            "seen_frames": self.pending_seen_frames,
+            "missed_frames": self.pending_missed_frames,
+            "travel_px": round(self._pending_travel() if travel is None else travel, 1),
+            "travel_threshold_px": round(
+                self._seed_travel_threshold(self.pending_ball) if travel_threshold is None else travel_threshold,
+                1,
+            ),
+            "confirm_frames_required": (
+                self._seed_confirm_frames_required(self.pending_ball) if confirm_frames is None else confirm_frames
+            ),
+        }
+
+    def _candidate_entry(self, det, score):
+        return {
+            "track_id": det.get("track_id"),
+            "center": list(det["center"]),
+            "conf": round(det.get("conf") or 0.0, 3),
+            "score": round(score, 1),
+        }
+
+    def _candidate_debug(self, ranked, limit=3):
+        return [self._candidate_entry(det, score) for det, score in ranked[:limit]]
+
+    def _seed_travel_threshold(self, det):
+        threshold = self.seed_min_travel_px
+        center_y = det["center"][1]
+        bbox = det.get("bbox") or [0, 0, 0, 0]
+        height = max(0, bbox[3] - bbox[1])
+        if center_y < 420 or height <= 14:
+            threshold *= 0.45
+        elif center_y < 520 or height <= 22:
+            threshold *= 0.65
+        if det.get("motion_gate") == "seed_bypass":
+            threshold = max(threshold * 1.75, 3.0)
+        return max(1.75, threshold)
+
+    def _seed_confirm_frames_required(self, det):
+        if det.get("motion_gate") == "seed_bypass":
+            return max(self.seed_confirm_frames + 1, 3)
+        return self.seed_confirm_frames
 
 
 def point_to_bbox_distance(point, bbox):
@@ -474,6 +760,32 @@ def world_point_in_court(world_point, margin=0.0):
     return -margin <= xw <= 36.0 + margin and -margin <= yw <= 78.0 + margin
 
 
+def ball_world_point_in_tracking_bounds(world_point):
+    if world_point is None:
+        return True
+    xw, yw = world_point
+    if yw < -60.0:
+        return 22.0 <= xw <= 32.5 and -105.0 <= yw <= -60.0
+    if yw < 0.0:
+        return 4.0 <= xw <= 32.0 and -60.0 <= yw <= 96.0
+    return -8.0 <= xw <= 44.0 and -24.0 <= yw <= 96.0
+
+
+def filter_ball_candidates_by_court(detections, inv_homography):
+    if inv_homography is None or not detections:
+        return detections
+
+    filtered = []
+    for det in detections:
+        contact_point = ball_contact_point(det)
+        center_point = det.get("center")
+        contact_world = project_to_court_world(contact_point, inv_homography)
+        center_world = project_to_court_world(center_point, inv_homography)
+        if ball_world_point_in_tracking_bounds(contact_world) or ball_world_point_in_tracking_bounds(center_world):
+            filtered.append(det)
+    return filtered
+
+
 class EventDetector:
     def __init__(
         self,
@@ -584,7 +896,10 @@ class EventDetector:
         out_vec = (p2[0] - p1[0], p2[1] - p1[1])
         in_speed = math.hypot(in_vec[0], in_vec[1])
         out_speed = math.hypot(out_vec[0], out_vec[1])
-        if in_speed < self.min_event_travel or out_speed < self.min_event_travel:
+        rough_world_point = project_to_court_world(contact_point or p1, self.inv_court_homography)
+        rough_side = self._classify_court_side(p1, rough_world_point)
+        speed_gate = self.min_event_travel if rough_side == "near" else self.min_event_travel * 0.28
+        if in_speed < speed_gate or out_speed < speed_gate:
             return None
 
         bounce_event = self._detect_bounce(
@@ -635,7 +950,13 @@ class EventDetector:
         if world_point is not None:
             court_margin = 0.75
             if not world_point_in_court(world_point, margin=court_margin):
-                return None
+                if side != "far":
+                    return None
+                center_world_point = project_to_court_world(point, self.inv_court_homography)
+                if self._far_world_point_in_bounds(center_world_point):
+                    world_point = center_world_point
+                elif not self._far_world_point_in_bounds(world_point):
+                    return None
         frame_h, frame_w = frame_shape[:2]
         x_margin = int(frame_w * self.bounce_x_margin_ratio)
         y_margin = int(frame_h * self.bounce_y_margin_ratio)
@@ -648,9 +969,6 @@ class EventDetector:
 
         net_distance_px = self._net_distance_px(contact_point)
         if self._near_net_corridor(side, world_point, net_distance_px):
-            return None
-
-        if self._trajectory_has_outlier(side, prev_points, point, next_points):
             return None
 
         if self._near_contact_zone(contact_point, players, rackets, side):
@@ -667,6 +985,15 @@ class EventDetector:
 
         dy_in = in_vec[1]
         dy_out = out_vec[1]
+        pattern_hint = None
+        if side == "far":
+            hint_far_margin = max(2.0, (self.bounce_min_vertical_change * 0.4) * 0.35)
+            if dy_in > -hint_far_margin and dy_out < hint_far_margin:
+                pattern_hint = "far_rebound"
+
+        if self._trajectory_has_outlier(side, prev_points, point, next_points, pattern_hint=pattern_hint):
+            return None
+
         vertical_change = dy_in - dy_out
         speed_in = math.hypot(in_vec[0], in_vec[1])
         speed_out = math.hypot(out_vec[0], out_vec[1])
@@ -685,28 +1012,39 @@ class EventDetector:
             pre_post_threshold = vertical_threshold * 0.7
             if pre_drop < pre_post_threshold or post_rise < pre_post_threshold:
                 return None
-            close_threshold = vertical_threshold * 0.25
+            close_threshold = vertical_threshold * 0.15
             if close_drop < close_threshold or close_rise < close_threshold:
                 return None
             if y < prev_close[1] or y < next_close[1]:
                 return None
+            near_player = players[-1] if players else None
+            if near_player is not None:
+                px1, py1, px2, py2 = near_player["bbox"]
+                if (
+                    in_vec[0] * out_vec[0] < 0
+                    and abs(in_vec[0] - out_vec[0]) > max(48.0, abs(vertical_change) * 0.35)
+                    and px1 - 20.0 <= x <= px2 + 28.0
+                    and py1 + ((py2 - py1) * 0.18) <= y <= py1 + ((py2 - py1) * 0.48)
+                ):
+                    return None
         else:
-            if y < prev_close[1] or y < next_close[1]:
-                return None
+            far_local_bottom = y >= prev_close[1] and y >= next_close[1]
             far_inflection = dy_in < -far_margin and dy_out < far_margin and (dy_out - dy_in) >= vertical_threshold
             far_rebound = dy_in > -far_margin and dy_out < far_margin
             far_entry = False
             if world_point is not None and 6.0 <= world_point[1] <= 35.5 and net_distance_px is not None and net_distance_px >= 18.0:
                 far_entry = (
-                    dy_in < -2.0
+                    dy_in < -18.0
                     and pre_rise >= vertical_threshold * 2.2
-                    and post_rise >= vertical_threshold * 0.55
+                    and post_rise >= vertical_threshold * 4.0
                     and speed_in >= travel_threshold * 1.15
                     and speed_out >= travel_threshold * 0.95
                 )
             if not far_inflection and not far_rebound and not far_entry:
                 return None
             if far_inflection:
+                if not far_local_bottom:
+                    return None
                 pattern = "far_inflection"
                 bounce_strength = max(dy_out - dy_in, pre_rise, post_rise, close_pre_rise + close_rise)
                 if pre_rise < vertical_threshold * 1.4 or post_rise < vertical_threshold * 0.7:
@@ -714,20 +1052,27 @@ class EventDetector:
                 if close_pre_rise < vertical_threshold * 0.3 or close_rise < vertical_threshold * 0.15:
                     return None
             elif far_entry:
+                if not far_local_bottom and (net_distance_px is None or net_distance_px < 30.0):
+                    return None
                 pattern = "far_entry"
                 bounce_strength = max(pre_rise, post_rise, dy_out - dy_in, close_pre_rise + close_rise)
-                if close_pre_rise < vertical_threshold * 0.2:
+                if close_pre_rise < vertical_threshold * 0.8:
                     return None
             else:
                 pattern = "far_rebound"
                 bounce_strength = max(vertical_change, pre_drop + post_rise, close_drop + close_rise)
-                if pre_drop < vertical_threshold * 0.45 or post_rise < vertical_threshold * 0.45:
+                if pre_drop < vertical_threshold * 0.35 or post_rise < vertical_threshold * 0.35:
                     return None
-                if close_drop < vertical_threshold * 0.10 or close_rise < vertical_threshold * 0.10:
+                if close_drop < vertical_threshold * 0.10:
+                    return None
+                if close_rise <= 0.0:
                     return None
 
         x_direction_consistent = (in_vec[0] == 0) or (out_vec[0] == 0) or (in_vec[0] * out_vec[0] >= 0)
-        x_change_limit = max(abs(vertical_change) * (1.25 if side == "near" else 1.0), speed_in * (1.05 if side == "near" else 0.7))
+        if side == "far" and pattern == "far_rebound":
+            x_change_limit = max(abs(vertical_change) * 1.2, speed_in * 1.05)
+        else:
+            x_change_limit = max(abs(vertical_change) * (1.25 if side == "near" else 1.0), speed_in * (1.05 if side == "near" else 0.7))
         if not x_direction_consistent and abs(in_vec[0] - out_vec[0]) > x_change_limit:
             return None
 
@@ -798,12 +1143,18 @@ class EventDetector:
             return 38.0 <= yw <= 46.0 and net_distance_px <= 12.0
         return 30.0 <= yw <= 40.5 and net_distance_px <= 14.0
 
+    def _far_world_point_in_bounds(self, world_point):
+        if world_point is None:
+            return False
+        xw, yw = world_point
+        return -1.5 <= xw <= 37.5 and -6.0 <= yw <= 41.0
+
     def _net_distance_px(self, point):
         if point is None or self.net_segment is None:
             return None
         return point_to_segment_distance(point, self.net_segment[0], self.net_segment[1])
 
-    def _trajectory_has_outlier(self, side, prev_points, point, next_points):
+    def _trajectory_has_outlier(self, side, prev_points, point, next_points, pattern_hint=None):
         points = list(prev_points) + [point] + list(next_points)
         steps = []
         for p0, p1 in zip(points, points[1:]):
@@ -818,6 +1169,8 @@ class EventDetector:
         max_step = max(steps)
         if side == "near":
             return max_step > 180.0 and max_step > median_step * 3.1
+        if pattern_hint == "far_rebound":
+            return max_step > 125.0 and max_step > median_step * 3.0
         return max_step > 95.0 and max_step > median_step * 2.3
 
     def _distinct_point_count(self, points):
@@ -899,6 +1252,18 @@ def parse_args():
         type=float,
         default=12.0,
         help="Minimum travel in pixels before a ball track is considered moving.",
+    )
+    parser.add_argument(
+        "--ball-seed-frames",
+        type=int,
+        default=2,
+        help="Detections required before a new active ball track is promoted.",
+    )
+    parser.add_argument(
+        "--ball-seed-min-travel",
+        type=float,
+        default=4.0,
+        help="Minimum travel during seed confirmation before promoting a new ball track.",
     )
     parser.add_argument(
         "--far-ball-roi-height",
@@ -1124,7 +1489,7 @@ def extract_detections(result):
     return detections
 
 
-def detect_ball_candidates(frame, model, args):
+def detect_ball_candidates(frame, model, args, return_debug=False):
     detections = run_ball_detection(
         model,
         frame,
@@ -1132,6 +1497,8 @@ def detect_ball_candidates(frame, model, args):
         imgsz=args.imgsz,
         device=args.device,
     )
+    raw_main_count = len(detections)
+    raw_far_count = 0
 
     if args.far_ball_roi_height > 0 and args.far_ball_roi_width > 0:
         frame_h, frame_w = frame.shape[:2]
@@ -1147,9 +1514,18 @@ def detect_ball_candidates(frame, model, args):
             imgsz=args.far_ball_imgsz,
             device=args.device,
         )
+        raw_far_count = len(roi_detections)
         detections.extend(offset_detections(roi_detections, roi_x1, roi_y1))
 
-    return dedupe_ball_detections(detections)
+    deduped = dedupe_ball_detections(detections)
+    if not return_debug:
+        return deduped
+    return deduped, {
+        "main_model_count": raw_main_count,
+        "far_roi_count": raw_far_count,
+        "raw_model_count": len(detections),
+        "deduped_model_count": len(deduped),
+    }
 
 
 def scene_ball_candidates(scene_detections):
@@ -1260,7 +1636,7 @@ def format_track_suffix(detection):
     return f"#{track_id}" if track_id is not None else ""
 
 
-def write_frame_log(handle, frame_index, ball, near_player, far_player, scene_detections, event):
+def write_frame_log(handle, frame_index, ball, near_player, far_player, scene_detections, event, ball_debug=None):
     row = {
         "frame": frame_index,
         "ball": ball,
@@ -1269,6 +1645,8 @@ def write_frame_log(handle, frame_index, ball, near_player, far_player, scene_de
         "player_far": far_player,
         "scene": scene_detections,
     }
+    if ball_debug is not None:
+        row["ball_debug"] = ball_debug
     handle.write(json.dumps(row) + "\n")
 
 
@@ -1324,7 +1702,10 @@ def main():
         history_frames=max(2, args.ball_motion_history),
         min_travel_px=args.ball_min_travel,
     )
-    ball_selector = BallSelector()
+    ball_selector = BallSelector(
+        seed_confirm_frames=max(1, args.ball_seed_frames),
+        seed_min_travel_px=max(0.0, args.ball_seed_min_travel),
+    )
     event_detector = EventDetector(
         bounce_min_vertical_change=args.bounce_min_vertical_change,
         bounce_min_gap_frames=max(1, args.bounce_min_gap_frames),
@@ -1361,12 +1742,30 @@ def main():
         )
         scene_raw_detections = extract_detections(scene_result)
         scene_detections = scene_tracker.update(scene_raw_detections)
-        ball_candidates = detect_ball_candidates(frame, ball_model, args)
-        ball_candidates.extend(scene_ball_candidates(scene_raw_detections))
-        ball_detections = ball_tracker.update(dedupe_ball_detections(ball_candidates))
-        ball_detections = ball_filter.filter(ball_detections)
-        ball_detections = moving_ball_filter.filter(ball_detections)
-        ball = ball_selector.select(ball_detections)
+        ball_model_candidates, ball_model_debug = detect_ball_candidates(frame, ball_model, args, return_debug=True)
+        scene_ball_detections = scene_ball_candidates(scene_raw_detections)
+        ball_candidates = list(ball_model_candidates)
+        ball_candidates.extend(scene_ball_detections)
+        deduped_ball_candidates = dedupe_ball_detections(ball_candidates)
+        court_ball_candidates = filter_ball_candidates_by_court(deduped_ball_candidates, inv_court_homography)
+        tracked_ball_detections = ball_tracker.update(court_ball_candidates)
+        stationary_ball_detections = ball_filter.filter(tracked_ball_detections)
+        moving_ball_detections = moving_ball_filter.filter(stationary_ball_detections)
+        ball = ball_selector.select(moving_ball_detections)
+        ball_debug = {
+            "counts": {
+                **ball_model_debug,
+                "scene_ball_count": len(scene_ball_detections),
+                "combined_count": len(ball_candidates),
+                "deduped_count": len(deduped_ball_candidates),
+                "court_count": len(court_ball_candidates),
+                "tracked_count": len(tracked_ball_detections),
+                "stationary_count": len(stationary_ball_detections),
+                "moving_count": len(moving_ball_detections),
+            },
+            "moving_filter": moving_ball_filter.last_debug,
+            "selector": ball_selector.last_debug,
+        }
         near_player, far_player, other_objects = split_players(scene_detections)
         racket_detections = [det for det in scene_detections if det["class_name"] == "tennis racket"]
         event = event_detector.update(
@@ -1423,7 +1822,16 @@ def main():
         )
 
         if log_handle is not None:
-            write_frame_log(log_handle, frame_index, ball, near_player, far_player, scene_detections, event)
+            write_frame_log(
+                log_handle,
+                frame_index,
+                ball,
+                near_player,
+                far_player,
+                scene_detections,
+                event,
+                ball_debug=ball_debug,
+            )
         if writer is not None:
             writer.write(frame)
         if not args.headless:
