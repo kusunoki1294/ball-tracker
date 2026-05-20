@@ -4,3 +4,12 @@ __pycache__/
 .DS_Store
 
 *.mp4
+*.avi
+*.AVI
+*.mov
+*.MOV
+*.pt
+*.jsonl
+
+yoloVids/
+vids/models/
