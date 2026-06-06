@@ -1,4 +1,5 @@
 import argparse
+import atexit
 import json
 import math
 import os
@@ -251,7 +252,14 @@ class MovingBallFilter:
 
 
 class BallSelector:
-    def __init__(self, seed_confirm_frames=2, seed_min_travel_px=4.0, seed_match_distance=90.0, pending_miss_tolerance=1):
+    def __init__(
+        self,
+        seed_confirm_frames=2,
+        seed_min_travel_px=4.0,
+        seed_match_distance=90.0,
+        pending_miss_tolerance=1,
+        coast_frames=2,
+    ):
         self.last_ball = None
         self.prev_ball = None
         self.missed_frames = 0
@@ -259,6 +267,7 @@ class BallSelector:
         self.seed_min_travel_px = max(0.0, float(seed_min_travel_px))
         self.seed_match_distance = max(1.0, float(seed_match_distance))
         self.pending_miss_tolerance = max(0, int(pending_miss_tolerance))
+        self.coast_frames = max(0, int(coast_frames))
         self.pending_ball = None
         self.pending_seen_frames = 0
         self.pending_missed_frames = 0
@@ -275,6 +284,9 @@ class BallSelector:
 
         if not ball_detections:
             self.missed_frames += 1
+            coasted_ball = None
+            if self.last_ball is not None and self.missed_frames <= self.coast_frames:
+                coasted_ball = self._coasted_ball()
             if self.missed_frames > 2:
                 self.prev_ball = self.last_ball
                 self.last_ball = None
@@ -290,9 +302,13 @@ class BallSelector:
                     "decision": "no_ball",
                     "reason": reason,
                     "missed_frames_after": self.missed_frames,
+                    "coasted": self._ball_debug(coasted_ball),
                     "pending": self._pending_debug(),
                 }
             )
+            if coasted_ball is not None:
+                self.last_debug.update({"decision": "selected", "reason": "coasted"})
+                return coasted_ball
             return None
 
         if self.last_ball is None:
@@ -382,6 +398,24 @@ class BallSelector:
         vx = last_center[0] - prev_center[0]
         vy = last_center[1] - prev_center[1]
         return (last_center[0] + vx, last_center[1] + vy)
+
+    def _coasted_ball(self):
+        predicted = self._predicted_center()
+        last_bbox = self.last_ball.get("bbox") or [0, 0, 0, 0]
+        width = max(4, int(last_bbox[2] - last_bbox[0]))
+        height = max(4, int(last_bbox[3] - last_bbox[1]))
+        cx = int(round(predicted[0]))
+        cy = int(round(predicted[1]))
+        half_w = width // 2
+        half_h = height // 2
+        return {
+            **self.last_ball,
+            "conf": min(float(self.last_ball.get("conf") or 0.0), 0.05),
+            "bbox": [cx - half_w, cy - half_h, cx - half_w + width, cy - half_h + height],
+            "center": [cx, cy],
+            "interpolated": True,
+            "motion_gate": "coast",
+        }
 
     def _initial_score(self, det):
         height = det["bbox"][3] - det["bbox"][1]
@@ -498,6 +532,16 @@ class BallSelector:
             "score": round(score, 1),
         }
 
+    def _ball_debug(self, det):
+        if det is None:
+            return None
+        return {
+            "track_id": det.get("track_id"),
+            "center": list(det["center"]),
+            "conf": round(det.get("conf") or 0.0, 3),
+            "interpolated": bool(det.get("interpolated")),
+        }
+
     def _candidate_debug(self, ranked, limit=3):
         return [self._candidate_entry(det, score) for det, score in ranked[:limit]]
 
@@ -526,6 +570,43 @@ def point_to_bbox_distance(point, bbox):
     dx = max(x1 - x, 0, x - x2)
     dy = max(y1 - y, 0, y - y2)
     return math.hypot(dx, dy)
+
+
+def filter_ball_candidates_by_contact_zone(
+    detections,
+    near_player,
+    racket_detections,
+    player_hit_margin_px,
+    racket_hit_margin_px,
+):
+    if not detections:
+        return detections
+
+    filtered = []
+    near_strike_zone = None
+    if near_player is not None:
+        x1, y1, x2, y2 = near_player["bbox"]
+        height = y2 - y1
+        near_strike_zone = [
+            x1 - max(6.0, player_hit_margin_px * 0.75),
+            y1 - max(38.0, height * 0.12),
+            x2 + max(24.0, player_hit_margin_px * 3.0),
+            y1 + (height * 0.35),
+        ]
+
+    racket_margin = max(10.0, racket_hit_margin_px * 0.75)
+    for det in detections:
+        point = ball_contact_point(det) or det.get("center")
+        if point is None:
+            filtered.append(det)
+            continue
+
+        if near_strike_zone is not None and point_to_bbox_distance(point, near_strike_zone) <= 0:
+            continue
+        if any(point_to_bbox_distance(point, racket["bbox"]) <= racket_margin for racket in racket_detections):
+            continue
+        filtered.append(det)
+    return filtered
 
 
 def point_to_segment_distance(point, segment_start, segment_end):
@@ -822,17 +903,19 @@ class EventDetector:
         self.net_segment = net_segment
         self.history = deque(maxlen=11)
         self.last_bounce_frame = -10**9
+        self.last_recovered_bounce_frame = -10**9
         self.events = []
         self.bounces = []
         self.event_frames = set()
 
     def update(self, frame_index, ball, frame_shape, players, rackets):
+        measured_ball = ball if ball is not None and not ball.get("interpolated") else None
         self.history.append(
             {
                 "frame": frame_index,
-                "ball": tuple(ball["center"]) if ball is not None else None,
-                "ball_contact": ball_contact_point(ball),
-                "ball_track_id": ball.get("track_id") if ball is not None else None,
+                "ball": tuple(measured_ball["center"]) if measured_ball is not None else None,
+                "ball_contact": ball_contact_point(measured_ball),
+                "ball_track_id": measured_ball.get("track_id") if measured_ball is not None else None,
                 "players": [player for player in players if player is not None],
                 "rackets": [racket for racket in rackets if racket is not None],
             }
@@ -870,7 +953,7 @@ class EventDetector:
         prev_valid = [point for point in prev_points if point is not None]
         next_valid = [point for point in next_points if point is not None]
         if len(prev_valid) < 2 or len(next_valid) < 2:
-            return None
+            return self._evaluate_reacquired_candidate(index, frame_shape)
 
         p0 = average_point(prev_points)
         p1 = center_item["ball"]
@@ -890,7 +973,13 @@ class EventDetector:
         side = self._classify_court_side(p1, world_point)
         min_distinct = 3 if side == "near" else 2
         if self._distinct_point_count(prev_valid) < min_distinct or self._distinct_point_count(next_valid) < min_distinct:
-            return None
+            if not (
+                side == "near"
+                and self._near_right_reacquired_region(world_point)
+                and len(prev_valid) >= 2
+                and len(next_valid) >= 3
+            ):
+                return self._evaluate_reacquired_candidate(index, frame_shape)
 
         in_vec = (p1[0] - p0[0], p1[1] - p0[1])
         out_vec = (p2[0] - p1[0], p2[1] - p1[1])
@@ -919,10 +1008,78 @@ class EventDetector:
             side=side,
             prev_contact_close=prev_contact_close,
             next_contact_close=next_contact_close,
+            transition_anchor=self._transition_anchor(history_items, index),
+            reacquired=False,
         )
         if bounce_event is not None:
             return bounce_event
         return None
+
+    def _evaluate_reacquired_candidate(self, index, frame_shape):
+        history_items = list(self.history)
+        center_item = history_items[index]
+        p1 = center_item["ball"]
+        if p1 is None:
+            return None
+
+        candidate_frame = center_item["frame"]
+        if candidate_frame in self.event_frames:
+            return None
+
+        prev_items = history_items[max(0, index - 8) : index]
+        next_items = history_items[index + 1 : index + 5]
+        prev_valid_items = [item for item in prev_items if item["ball"] is not None]
+        next_valid = [item["ball"] for item in next_items if item["ball"] is not None]
+        if not prev_valid_items or len(next_valid) < 2:
+            return None
+
+        prev_item = prev_valid_items[-1]
+        prev_gap = candidate_frame - prev_item["frame"]
+        if prev_gap < 3 or prev_gap > 8:
+            return None
+
+        contact_point = center_item["ball_contact"] or p1
+        world_point = project_to_court_world(contact_point, self.inv_court_homography)
+        side = self._classify_court_side(p1, world_point)
+        if side != "near" or not self._near_right_reacquired_region(world_point):
+            return None
+
+        next_close = next_valid[0]
+        if contact_point[1] < next_close[1] + 6.0:
+            return None
+
+        p0 = prev_item["ball"]
+        p2 = average_point([item["ball"] for item in next_items])
+        if p2 is None:
+            return None
+
+        in_vec = (p1[0] - p0[0], p1[1] - p0[1])
+        out_vec = (p2[0] - p1[0], p2[1] - p1[1])
+        if math.hypot(*in_vec) < self.min_event_travel or math.hypot(*out_vec) < self.min_event_travel:
+            return None
+
+        prev_contact = prev_item["ball_contact"] or p0
+        next_contact = next((item["ball_contact"] for item in next_items if item["ball_contact"] is not None), next_close)
+        return self._detect_bounce(
+            candidate_frame=candidate_frame,
+            point=p1,
+            frame_shape=frame_shape,
+            in_vec=in_vec,
+            out_vec=out_vec,
+            prev_points=[p0],
+            next_points=next_valid,
+            players=center_item["players"],
+            rackets=center_item["rackets"],
+            prev_close=p0,
+            next_close=next_close,
+            contact_point=contact_point,
+            world_point=world_point,
+            side=side,
+            prev_contact_close=prev_contact,
+            next_contact_close=next_contact,
+            transition_anchor=None,
+            reacquired=True,
+        )
 
     def _detect_bounce(
         self,
@@ -942,6 +1099,8 @@ class EventDetector:
         side,
         prev_contact_close,
         next_contact_close,
+        transition_anchor=None,
+        reacquired=False,
     ):
         if candidate_frame - self.last_bounce_frame < self.bounce_min_gap_frames:
             return None
@@ -971,9 +1130,6 @@ class EventDetector:
         if self._near_net_corridor(side, world_point, net_distance_px):
             return None
 
-        if self._near_contact_zone(contact_point, players, rackets, side):
-            return None
-
         prev_avg_y = sum(ball_point[1] for ball_point in prev_points) / len(prev_points)
         next_avg_y = sum(ball_point[1] for ball_point in next_points) / len(next_points)
         pre_drop = y - prev_avg_y
@@ -983,6 +1139,33 @@ class EventDetector:
         pre_rise = prev_avg_y - y
         close_pre_rise = prev_close[1] - y
 
+        near_contact_zone = self._near_contact_zone(contact_point, players, rackets, side)
+        if self._near_player_baseline_bounce(contact_point, players, rackets, side, world_point):
+            return None
+        if self._far_player_local_bounce(contact_point, players, side, world_point):
+            return None
+        near_recovered_bounce = False
+        if near_contact_zone:
+            near_recovered_bounce = self._near_ground_bounce_recovery(
+                candidate_frame=candidate_frame,
+                side=side,
+                world_point=world_point,
+                y=y,
+                frame_h=frame_h,
+                pre_drop=pre_drop,
+                post_rise=post_rise,
+                close_drop=close_drop,
+                close_rise=close_rise,
+            )
+        if near_contact_zone and not near_recovered_bounce:
+            return None
+
+        if near_recovered_bounce and candidate_frame - self.last_bounce_frame < 35:
+            return None
+
+        if near_recovered_bounce and candidate_frame - self.last_recovered_bounce_frame < 35:
+            return None
+
         dy_in = in_vec[1]
         dy_out = out_vec[1]
         pattern_hint = None
@@ -991,7 +1174,10 @@ class EventDetector:
             if dy_in > -hint_far_margin and dy_out < hint_far_margin:
                 pattern_hint = "far_rebound"
 
-        if self._trajectory_has_outlier(side, prev_points, point, next_points, pattern_hint=pattern_hint):
+        if (
+            not reacquired
+            and self._trajectory_has_outlier(side, prev_points, point, next_points, pattern_hint=pattern_hint)
+        ):
             return None
 
         vertical_change = dy_in - dy_out
@@ -1002,21 +1188,53 @@ class EventDetector:
         far_margin = max(2.0, vertical_threshold * 0.35)
         if speed_in < travel_threshold or speed_out < travel_threshold:
             return None
-        pattern = "near_rebound"
+        pattern = "near_rebound_recovered" if near_recovered_bounce else "near_rebound"
         if side == "near":
-            if dy_in <= -far_margin or dy_out >= far_margin:
-                return None
-            bounce_strength = max(vertical_change, pre_drop + post_rise, close_drop + close_rise)
-            if bounce_strength < vertical_threshold:
-                return None
-            pre_post_threshold = vertical_threshold * 0.7
-            if pre_drop < pre_post_threshold or post_rise < pre_post_threshold:
-                return None
-            close_threshold = vertical_threshold * 0.15
-            if close_drop < close_threshold or close_rise < close_threshold:
-                return None
-            if y < prev_close[1] or y < next_close[1]:
-                return None
+            near_transition_rebound = self._near_transition_rebound(
+                world_point=world_point,
+                dy_in=dy_in,
+                dy_out=dy_out,
+                pre_drop=pre_drop,
+                post_rise=post_rise,
+                close_drop=close_drop,
+                close_rise=close_rise,
+            )
+            if near_transition_rebound:
+                pattern = "near_transition_rebound"
+                bounce_strength = max(dy_out - dy_in, post_rise, close_drop + close_rise)
+                if transition_anchor is not None:
+                    candidate_frame = transition_anchor["frame"]
+                    contact_point = transition_anchor["point"]
+                    world_point = transition_anchor["world_point"] or world_point
+                    x, y = contact_point
+            elif reacquired and self._near_right_reacquired_region(world_point):
+                pattern = "near_right_reacquired_rebound"
+                bounce_strength = max(vertical_change, pre_drop + post_rise, close_drop + close_rise)
+            elif self._near_right_shallow_rebound(
+                world_point=world_point,
+                dy_in=dy_in,
+                dy_out=dy_out,
+                pre_drop=pre_drop,
+                post_rise=post_rise,
+                close_drop=close_drop,
+                close_rise=close_rise,
+            ):
+                pattern = "near_right_shallow_rebound"
+                bounce_strength = max(vertical_change, pre_drop + post_rise, close_drop + close_rise)
+            else:
+                if dy_in <= -far_margin or dy_out >= far_margin:
+                    return None
+                bounce_strength = max(vertical_change, pre_drop + post_rise, close_drop + close_rise)
+                if bounce_strength < vertical_threshold:
+                    return None
+                pre_post_threshold = vertical_threshold * 0.7
+                if pre_drop < pre_post_threshold or post_rise < pre_post_threshold:
+                    return None
+                close_threshold = vertical_threshold * 0.15
+                if close_drop < close_threshold or close_rise < close_threshold:
+                    return None
+                if y < prev_close[1] or y < next_close[1]:
+                    return None
             near_player = players[-1] if players else None
             if near_player is not None:
                 px1, py1, px2, py2 = near_player["bbox"]
@@ -1052,7 +1270,7 @@ class EventDetector:
                 if close_pre_rise < vertical_threshold * 0.3 or close_rise < vertical_threshold * 0.15:
                     return None
             elif far_entry:
-                if not far_local_bottom and (net_distance_px is None or net_distance_px < 30.0):
+                if not far_local_bottom:
                     return None
                 pattern = "far_entry"
                 bounce_strength = max(pre_rise, post_rise, dy_out - dy_in, close_pre_rise + close_rise)
@@ -1090,7 +1308,30 @@ class EventDetector:
         }
         self._record_event(event)
         self.last_bounce_frame = candidate_frame
+        if near_recovered_bounce:
+            self.last_recovered_bounce_frame = candidate_frame
         return event
+
+    def _transition_anchor(self, history_items, index):
+        center_frame = history_items[index]["frame"]
+        candidates = []
+        for item in history_items[max(0, index - 8) : index + 1]:
+            point = item.get("ball_contact")
+            if point is None:
+                continue
+            if center_frame - item["frame"] > 8:
+                continue
+            world_point = project_to_court_world(point, self.inv_court_homography)
+            candidates.append(
+                {
+                    "frame": item["frame"],
+                    "point": point,
+                    "world_point": world_point,
+                }
+            )
+        if not candidates:
+            return None
+        return max(candidates, key=lambda item: item["point"][1])
 
     def _classify_court_side(self, point, world_point):
         if world_point is not None:
@@ -1114,7 +1355,7 @@ class EventDetector:
                     x1 - 14.0,
                     y1 + (height * 0.08),
                     x2 + 28.0,
-                    y1 + (height * 0.38),
+                    y1 + (height * 0.45),
                 ]
                 if point_to_bbox_distance(point, strike_zone) <= 0:
                     return True
@@ -1133,6 +1374,131 @@ class EventDetector:
         for racket in rackets:
             if point_to_bbox_distance(point, racket["bbox"]) <= racket_margin:
                 return True
+        return False
+
+    def _near_transition_rebound(
+        self,
+        world_point,
+        dy_in,
+        dy_out,
+        pre_drop,
+        post_rise,
+        close_drop,
+        close_rise,
+    ):
+        if world_point is None:
+            return False
+        xw, yw = world_point
+        if not (30.0 <= xw <= 36.8 and 38.7 <= yw <= 42.2):
+            return False
+        if not (dy_in <= -8.0 and dy_out < 0.0 and (dy_out - dy_in) >= 6.0):
+            return False
+        if post_rise < 12.0:
+            return False
+        if close_drop < 2.0 or close_rise < 8.0:
+            return False
+        if pre_drop > 0.0:
+            return False
+        return True
+
+    def _near_right_reacquired_region(self, world_point):
+        if world_point is None:
+            return False
+        xw, yw = world_point
+        return 27.0 <= xw <= 34.5 and 50.0 <= yw <= 67.0
+
+    def _near_right_shallow_rebound(
+        self,
+        world_point,
+        dy_in,
+        dy_out,
+        pre_drop,
+        post_rise,
+        close_drop,
+        close_rise,
+    ):
+        if not self._near_right_reacquired_region(world_point):
+            return False
+        if dy_in <= 18.0 or dy_out >= -2.0:
+            return False
+        if pre_drop < 44.0 or post_rise < 8.0:
+            return False
+        if close_drop < 12.0 or close_rise < 5.0:
+            return False
+        return True
+
+    def _near_player_baseline_bounce(self, point, players, rackets, side, world_point):
+        if side != "near" or world_point is None:
+            return False
+        _, yw = world_point
+        if yw < 74.0:
+            return False
+
+        for player in players:
+            x1, y1, x2, y2 = player["bbox"]
+            height = y2 - y1
+            if height < 180:
+                continue
+            lower_player_zone = [
+                x1 - 34.0,
+                y1 + (height * 0.38),
+                x2 + 34.0,
+                y2 + 26.0,
+            ]
+            if point_to_bbox_distance(point, lower_player_zone) <= 0:
+                return True
+
+        racket_margin = max(38.0, self.racket_hit_margin_px * 1.8)
+        return any(point_to_bbox_distance(point, racket["bbox"]) <= racket_margin for racket in rackets)
+
+    def _far_player_local_bounce(self, point, players, side, world_point):
+        if side != "far" or world_point is None:
+            return False
+        _, yw = world_point
+        if yw > 24.0:
+            return False
+
+        for player in players:
+            x1, y1, x2, y2 = player["bbox"]
+            height = y2 - y1
+            if height < 45 or height > 150:
+                continue
+            lower_player_zone = [
+                x1 - 12.0,
+                y1 + (height * 0.52),
+                x2 + 12.0,
+                y2 + 18.0,
+            ]
+            if point_to_bbox_distance(point, lower_player_zone) <= 0:
+                return True
+        return False
+
+    def _near_ground_bounce_recovery(
+        self,
+        candidate_frame,
+        side,
+        world_point,
+        y,
+        frame_h,
+        pre_drop,
+        post_rise,
+        close_drop,
+        close_rise,
+    ):
+        if side != "near" or world_point is None:
+            return False
+        xw, yw = world_point
+        if not (1.0 <= xw <= 35.0 and 42.0 <= yw <= 76.5):
+            return False
+        if y < frame_h * 0.46:
+            return False
+        bounce_strength = max(pre_drop + post_rise, close_drop + close_rise)
+        if bounce_strength < 52.0:
+            return False
+        if pre_drop >= 28.0 and post_rise >= 18.0:
+            return True
+        if pre_drop >= 18.0 and post_rise >= 44.0:
+            return True
         return False
 
     def _near_net_corridor(self, side, world_point, net_distance_px):
@@ -1266,6 +1632,29 @@ def parse_args():
         help="Minimum travel during seed confirmation before promoting a new ball track.",
     )
     parser.add_argument(
+        "--ball-seed-miss-tolerance",
+        type=int,
+        default=1,
+        help="Missing frames tolerated while confirming a new ball track.",
+    )
+    parser.add_argument(
+        "--ball-seed-match-distance",
+        type=float,
+        default=90.0,
+        help="Maximum distance for matching detections to a pending ball seed.",
+    )
+    parser.add_argument(
+        "--ball-coast-frames",
+        type=int,
+        default=2,
+        help="Predicted frames to draw/log after a confirmed ball track temporarily loses detections.",
+    )
+    parser.add_argument(
+        "--filter-contact-ball-candidates",
+        action="store_true",
+        help="Drop ball candidates inside near-player/racket contact zones before tracking.",
+    )
+    parser.add_argument(
         "--far-ball-roi-height",
         type=float,
         default=0.66,
@@ -1390,6 +1779,18 @@ def parse_args():
         help="Only draw the tennis ball and the two players.",
     )
     parser.add_argument("--headless", action="store_true", help="Disable the preview window.")
+    parser.add_argument(
+        "--max-frames",
+        type=int,
+        default=0,
+        help="Stop after this many frames. Use 0 to process the whole video.",
+    )
+    parser.add_argument(
+        "--start-frame",
+        type=int,
+        default=0,
+        help="Zero-based input frame to start processing from.",
+    )
     parser.add_argument(
         "--log-jsonl",
         help="Optional JSONL output with per-frame ball, player, and scene detections.",
@@ -1664,6 +2065,8 @@ def main():
     cap = cv2.VideoCapture(args.video)
     if not cap.isOpened():
         raise RuntimeError(f"Could not open video: {args.video}")
+    if args.start_frame > 0:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, args.start_frame)
 
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 0
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 0
@@ -1692,6 +2095,17 @@ def main():
             raise RuntimeError(f"Could not open output writer: {args.output}")
 
     log_handle = open(args.log_jsonl, "w", encoding="utf-8") if args.log_jsonl else None
+
+    def cleanup_outputs():
+        cap.release()
+        if writer is not None:
+            writer.release()
+        if log_handle is not None and not log_handle.closed:
+            log_handle.close()
+        cv2.destroyAllWindows()
+
+    atexit.register(cleanup_outputs)
+
     ball_trail = deque(maxlen=max(1, args.trail))
     ball_tracker = SimpleTracker(max_distance=args.ball_max_distance)
     ball_filter = StationaryTrackFilter(
@@ -1705,6 +2119,9 @@ def main():
     ball_selector = BallSelector(
         seed_confirm_frames=max(1, args.ball_seed_frames),
         seed_min_travel_px=max(0.0, args.ball_seed_min_travel),
+        seed_match_distance=max(1.0, args.ball_seed_match_distance),
+        pending_miss_tolerance=max(0, args.ball_seed_miss_tolerance),
+        coast_frames=max(0, args.ball_coast_frames),
     )
     event_detector = EventDetector(
         bounce_min_vertical_change=args.bounce_min_vertical_change,
@@ -1724,7 +2141,8 @@ def main():
         net_segment=net_segment,
     )
     scene_tracker = SimpleTracker(max_distance=args.object_max_distance)
-    frame_index = 0
+    frame_index = max(0, args.start_frame)
+    processed_frames = 0
 
     while True:
         ok, frame = cap.read()
@@ -1732,6 +2150,7 @@ def main():
             break
 
         frame_index += 1
+        processed_frames += 1
         scene_result = run_track(
             scene_model,
             frame,
@@ -1742,12 +2161,24 @@ def main():
         )
         scene_raw_detections = extract_detections(scene_result)
         scene_detections = scene_tracker.update(scene_raw_detections)
+        near_player, far_player, other_objects = split_players(scene_detections)
+        racket_detections = [det for det in scene_detections if det["class_name"] == "tennis racket"]
         ball_model_candidates, ball_model_debug = detect_ball_candidates(frame, ball_model, args, return_debug=True)
         scene_ball_detections = scene_ball_candidates(scene_raw_detections)
         ball_candidates = list(ball_model_candidates)
         ball_candidates.extend(scene_ball_detections)
         deduped_ball_candidates = dedupe_ball_detections(ball_candidates)
-        court_ball_candidates = filter_ball_candidates_by_court(deduped_ball_candidates, inv_court_homography)
+        if args.filter_contact_ball_candidates:
+            contact_filtered_ball_candidates = filter_ball_candidates_by_contact_zone(
+                deduped_ball_candidates,
+                near_player,
+                racket_detections,
+                args.player_hit_margin_px,
+                args.racket_hit_margin_px,
+            )
+        else:
+            contact_filtered_ball_candidates = deduped_ball_candidates
+        court_ball_candidates = filter_ball_candidates_by_court(contact_filtered_ball_candidates, inv_court_homography)
         tracked_ball_detections = ball_tracker.update(court_ball_candidates)
         stationary_ball_detections = ball_filter.filter(tracked_ball_detections)
         moving_ball_detections = moving_ball_filter.filter(stationary_ball_detections)
@@ -1758,6 +2189,7 @@ def main():
                 "scene_ball_count": len(scene_ball_detections),
                 "combined_count": len(ball_candidates),
                 "deduped_count": len(deduped_ball_candidates),
+                "contact_filtered_count": len(contact_filtered_ball_candidates),
                 "court_count": len(court_ball_candidates),
                 "tracked_count": len(tracked_ball_detections),
                 "stationary_count": len(stationary_ball_detections),
@@ -1766,8 +2198,6 @@ def main():
             "moving_filter": moving_ball_filter.last_debug,
             "selector": ball_selector.last_debug,
         }
-        near_player, far_player, other_objects = split_players(scene_detections)
-        racket_detections = [det for det in scene_detections if det["class_name"] == "tennis racket"]
         event = event_detector.update(
             frame_index,
             ball,
@@ -1839,13 +2269,10 @@ def main():
             key = cv2.waitKey(1) & 0xFF
             if key in (27, ord("q")):
                 break
+        if args.max_frames > 0 and processed_frames >= args.max_frames:
+            break
 
-    cap.release()
-    if writer is not None:
-        writer.release()
-    if log_handle is not None:
-        log_handle.close()
-    cv2.destroyAllWindows()
+    cleanup_outputs()
 
 
 if __name__ == "__main__":
