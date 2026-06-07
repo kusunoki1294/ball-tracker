@@ -32,7 +32,7 @@ def parse_args():
         help="Keep one-bounce segments, useful for aces, faults, or very short points.",
     )
     parser.add_argument("--pre-roll-frames", type=int, default=90, help="Frames to include before first event.")
-    parser.add_argument("--post-roll-frames", type=int, default=90, help="Frames to include after last event.")
+    parser.add_argument("--post-roll-frames", type=int, default=30, help="Frames to include after last event.")
     parser.add_argument(
         "--merge-gap-frames",
         type=int,
