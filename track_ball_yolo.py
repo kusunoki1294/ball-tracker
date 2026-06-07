@@ -251,6 +251,136 @@ class MovingBallFilter:
         return len(distinct)
 
 
+class OnlineBallTrackAssist:
+    def __init__(self, learning_rate=0.02, influence=0.35, margin=0.15, update=True):
+        self.learning_rate = max(0.0, float(learning_rate))
+        self.influence = max(0.0, float(influence))
+        self.margin = max(0.0, float(margin))
+        self.update_enabled = bool(update)
+        self.weights = {
+            "bias": 0.0,
+            "conf": 2.2,
+            "size": 0.4,
+            "distance": 2.4,
+            "same_track": 0.9,
+            "alignment": 0.8,
+            "speed_consistency": 0.6,
+            "far_side": 0.15,
+        }
+        self.last_debug = {}
+        self.update_count = 0
+
+    def rank(self, detections, predicted, last_ball, prev_ball, base_ranked):
+        if not detections:
+            self.last_debug = {"enabled": True, "candidate_count": 0}
+            return []
+
+        base_scores = {id(det): score for det, score in base_ranked}
+        ranked = []
+        entries = []
+        for det in detections:
+            features = self._features(det, predicted, last_ball, prev_ball)
+            model_score = self._score_features(features)
+            base_score = base_scores.get(id(det), 0.0)
+            combined_score = base_score + (self.influence * model_score * 25.0)
+            ranked.append((det, combined_score, model_score, features, base_score))
+            entries.append(
+                {
+                    "track_id": det.get("track_id"),
+                    "center": list(det["center"]),
+                    "conf": round(det.get("conf") or 0.0, 3),
+                    "base_score": round(base_score, 1),
+                    "model_score": round(model_score, 3),
+                    "combined_score": round(combined_score, 1),
+                    "features": {key: round(value, 3) for key, value in features.items()},
+                }
+            )
+
+        ranked.sort(key=lambda item: item[1], reverse=True)
+        entries.sort(key=lambda item: item["combined_score"], reverse=True)
+        self.last_debug = {
+            "enabled": True,
+            "candidate_count": len(detections),
+            "influence": round(self.influence, 3),
+            "updates": self.update_count,
+            "top_candidates": entries[:3],
+        }
+        return [(det, combined_score) for det, combined_score, _model_score, _features, _base_score in ranked]
+
+    def learn(self, selected, detections, predicted, last_ball, prev_ball):
+        if not self.update_enabled or self.learning_rate <= 0.0 or selected is None or len(detections) < 2:
+            return
+
+        selected_features = self._features(selected, predicted, last_ball, prev_ball)
+        selected_score = self._score_features(selected_features)
+        hardest_negative = None
+        hardest_score = None
+        hardest_features = None
+        for det in detections:
+            if det is selected:
+                continue
+            features = self._features(det, predicted, last_ball, prev_ball)
+            score = self._score_features(features)
+            if hardest_score is None or score > hardest_score:
+                hardest_negative = det
+                hardest_score = score
+                hardest_features = features
+
+        if hardest_negative is None or hardest_features is None:
+            return
+        if selected_score > hardest_score + self.margin:
+            return
+
+        for key in self.weights:
+            self.weights[key] += self.learning_rate * (selected_features[key] - hardest_features[key])
+        self.update_count += 1
+        self.last_debug["last_update"] = {
+            "selected_track_id": selected.get("track_id"),
+            "negative_track_id": hardest_negative.get("track_id"),
+            "selected_score": round(selected_score, 3),
+            "negative_score": round(hardest_score, 3),
+        }
+
+    def _features(self, det, predicted, last_ball, prev_ball):
+        center = tuple(det["center"])
+        conf = float(det.get("conf") or 0.0)
+        bbox = det.get("bbox") or [0, 0, 0, 0]
+        height = max(0.0, float(bbox[3] - bbox[1]))
+        distance = math.hypot(center[0] - predicted[0], center[1] - predicted[1]) if predicted is not None else 0.0
+        same_track = 0.0
+        if last_ball is not None and det.get("track_id") is not None and det.get("track_id") == last_ball.get("track_id"):
+            same_track = 1.0
+
+        alignment = 0.0
+        speed_consistency = 0.0
+        if last_ball is not None and prev_ball is not None:
+            last_center = tuple(last_ball["center"])
+            prev_center = tuple(prev_ball["center"])
+            pred_vx = last_center[0] - prev_center[0]
+            pred_vy = last_center[1] - prev_center[1]
+            cand_vx = center[0] - last_center[0]
+            cand_vy = center[1] - last_center[1]
+            pred_speed = math.hypot(pred_vx, pred_vy)
+            cand_speed = math.hypot(cand_vx, cand_vy)
+            if pred_speed > 1.0 and cand_speed > 1.0:
+                alignment = ((pred_vx * cand_vx) + (pred_vy * cand_vy)) / (pred_speed * cand_speed)
+                speed_consistency = -min(2.0, abs(cand_speed - pred_speed) / max(pred_speed, 10.0))
+
+        return {
+            "bias": 1.0,
+            "conf": min(1.0, max(0.0, conf)),
+            "size": min(1.0, height / 18.0),
+            "distance": -min(2.0, distance / 220.0),
+            "same_track": same_track,
+            "alignment": max(-1.0, min(1.0, alignment)),
+            "speed_consistency": speed_consistency,
+            "far_side": 1.0 if center[1] < 420 else 0.0,
+        }
+
+    def _score_features(self, features):
+        return sum(self.weights[key] * features[key] for key in self.weights)
+
+
 class BallSelector:
     def __init__(
         self,
@@ -259,6 +389,7 @@ class BallSelector:
         seed_match_distance=90.0,
         pending_miss_tolerance=1,
         coast_frames=2,
+        ai_assist=None,
     ):
         self.last_ball = None
         self.prev_ball = None
@@ -272,6 +403,7 @@ class BallSelector:
         self.pending_seen_frames = 0
         self.pending_missed_frames = 0
         self.pending_history = deque(maxlen=max(2, self.seed_confirm_frames + self.pending_miss_tolerance + 1))
+        self.ai_assist = ai_assist
         self.last_debug = {}
 
     def select(self, ball_detections):
@@ -362,12 +494,19 @@ class BallSelector:
             key=lambda item: item[1],
             reverse=True,
         )
+        ai_used = False
+        if self.ai_assist is not None:
+            ai_ranked = self.ai_assist.rank(ball_detections, predicted, self.last_ball, self.prev_ball, ranked)
+            if ai_ranked:
+                ranked = ai_ranked
+                ai_used = True
         chosen, chosen_score = ranked[0]
         self.last_debug.update(
             {
                 "predicted_center": [int(round(predicted[0])), int(round(predicted[1]))],
                 "top_candidates": self._candidate_debug(ranked),
                 "selected_candidate": self._candidate_entry(chosen, chosen_score),
+                "ai_assist": self.ai_assist.last_debug if self.ai_assist is not None else None,
             }
         )
         if self._reject_far_jump(chosen, predicted):
@@ -380,9 +519,14 @@ class BallSelector:
                 }
             )
             return None
+        previous_last = self.last_ball
+        previous_prev = self.prev_ball
         self._clear_pending()
         self._record(chosen)
-        self.last_debug.update({"decision": "selected", "reason": "tracked"})
+        if self.ai_assist is not None:
+            self.ai_assist.learn(chosen, ball_detections, predicted, previous_last, previous_prev)
+            self.last_debug["ai_assist"] = self.ai_assist.last_debug
+        self.last_debug.update({"decision": "selected", "reason": "tracked_ai" if ai_used else "tracked"})
         return chosen
 
     def _record(self, ball):
@@ -1655,6 +1799,28 @@ def parse_args():
         help="Drop ball candidates inside near-player/racket contact zones before tracking.",
     )
     parser.add_argument(
+        "--ball-ai-assist",
+        action="store_true",
+        help="Enable the online AI-assisted ball candidate re-ranker during active tracking.",
+    )
+    parser.add_argument(
+        "--ball-ai-learning-rate",
+        type=float,
+        default=0.02,
+        help="Learning rate for the online ball AI assist perceptron updates.",
+    )
+    parser.add_argument(
+        "--ball-ai-influence",
+        type=float,
+        default=0.35,
+        help="How strongly the AI assist score can adjust the baseline tracking score.",
+    )
+    parser.add_argument(
+        "--no-ball-ai-online-learning",
+        action="store_true",
+        help="Use the AI assist scorer without online per-video updates.",
+    )
+    parser.add_argument(
         "--far-ball-roi-height",
         type=float,
         default=0.66,
@@ -2116,12 +2282,20 @@ def main():
         history_frames=max(2, args.ball_motion_history),
         min_travel_px=args.ball_min_travel,
     )
+    ball_ai_assist = None
+    if args.ball_ai_assist:
+        ball_ai_assist = OnlineBallTrackAssist(
+            learning_rate=max(0.0, args.ball_ai_learning_rate),
+            influence=max(0.0, args.ball_ai_influence),
+            update=not args.no_ball_ai_online_learning,
+        )
     ball_selector = BallSelector(
         seed_confirm_frames=max(1, args.ball_seed_frames),
         seed_min_travel_px=max(0.0, args.ball_seed_min_travel),
         seed_match_distance=max(1.0, args.ball_seed_match_distance),
         pending_miss_tolerance=max(0, args.ball_seed_miss_tolerance),
         coast_frames=max(0, args.ball_coast_frames),
+        ai_assist=ball_ai_assist,
     )
     event_detector = EventDetector(
         bounce_min_vertical_change=args.bounce_min_vertical_change,
