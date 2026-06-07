@@ -252,7 +252,9 @@ class MovingBallFilter:
 
 
 class OnlineBallTrackAssist:
-    def __init__(self, learning_rate=0.02, influence=0.35, margin=0.15, update=True):
+    FEATURE_KEYS = ["bias", "conf", "size", "distance", "same_track", "alignment", "speed_consistency", "far_side"]
+
+    def __init__(self, learning_rate=0.02, influence=0.35, margin=0.15, update=True, model_path=None):
         self.learning_rate = max(0.0, float(learning_rate))
         self.influence = max(0.0, float(influence))
         self.margin = max(0.0, float(margin))
@@ -267,6 +269,9 @@ class OnlineBallTrackAssist:
             "speed_consistency": 0.6,
             "far_side": 0.15,
         }
+        self.model_path = None
+        if model_path:
+            self._load_model(model_path)
         self.last_debug = {}
         self.update_count = 0
 
@@ -303,6 +308,7 @@ class OnlineBallTrackAssist:
             "candidate_count": len(detections),
             "influence": round(self.influence, 3),
             "updates": self.update_count,
+            "model_path": self.model_path,
             "top_candidates": entries[:3],
         }
         return [(det, combined_score) for det, combined_score, _model_score, _features, _base_score in ranked]
@@ -377,8 +383,19 @@ class OnlineBallTrackAssist:
             "far_side": 1.0 if center[1] < 420 else 0.0,
         }
 
+    def _load_model(self, model_path):
+        with open(model_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        weights = payload.get("weights") if isinstance(payload, dict) else None
+        if not isinstance(weights, dict):
+            raise ValueError(f"Invalid ball AI model file: {model_path}")
+        for key in self.FEATURE_KEYS:
+            if key in weights:
+                self.weights[key] = float(weights[key])
+        self.model_path = str(model_path)
+
     def _score_features(self, features):
-        return sum(self.weights[key] * features[key] for key in self.weights)
+        return sum(self.weights[key] * features[key] for key in self.FEATURE_KEYS)
 
 
 class BallSelector:
@@ -1816,6 +1833,10 @@ def parse_args():
         help="How strongly the AI assist score can adjust the baseline tracking score.",
     )
     parser.add_argument(
+        "--ball-ai-model",
+        help="Optional JSON model file trained by train_ball_ai.py for ball candidate scoring.",
+    )
+    parser.add_argument(
         "--no-ball-ai-online-learning",
         action="store_true",
         help="Use the AI assist scorer without online per-video updates.",
@@ -2288,6 +2309,7 @@ def main():
             learning_rate=max(0.0, args.ball_ai_learning_rate),
             influence=max(0.0, args.ball_ai_influence),
             update=not args.no_ball_ai_online_learning,
+            model_path=args.ball_ai_model,
         )
     ball_selector = BallSelector(
         seed_confirm_frames=max(1, args.ball_seed_frames),
