@@ -40,6 +40,12 @@ def parse_args():
         help="Merge final segments separated by this many frames or fewer.",
     )
     parser.add_argument(
+        "--attach-single-event-gap-frames",
+        type=int,
+        default=300,
+        help="Attach a one-event group to the previous segment when it is within this many frames.",
+    )
+    parser.add_argument(
         "--write-clips",
         action="store_true",
         help="Write one video clip per detected segment with ffmpeg.",
@@ -104,6 +110,18 @@ def group_events(events, max_gap_frames):
     return groups
 
 
+def attach_single_event_tails(groups, max_gap_frames):
+    attached = []
+    for group in groups:
+        if len(group) == 1 and attached:
+            previous = attached[-1]
+            if group[0]["event_frame"] - previous[-1]["event_frame"] <= max_gap_frames:
+                previous.extend(group)
+                continue
+        attached.append(group)
+    return attached
+
+
 def merge_segments(segments, merge_gap_frames):
     if not segments:
         return []
@@ -124,7 +142,9 @@ def merge_segments(segments, merge_gap_frames):
 
 def build_segments(events, total_frames, args):
     segments = []
-    for group in group_events(events, args.max_event_gap_frames):
+    groups = group_events(events, args.max_event_gap_frames)
+    groups = attach_single_event_tails(groups, args.attach_single_event_gap_frames)
+    for group in groups:
         if len(group) < args.min_events and not args.keep_single_event_segments:
             continue
         start_frame = max(1, group[0]["event_frame"] - args.pre_roll_frames)
