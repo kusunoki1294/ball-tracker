@@ -184,13 +184,9 @@ def infer_segment_end(group, ball_frames, total_frames, args):
         if frame_gap >= args.end_dead_gap_frames:
             break
 
-        if not current.get("interpolated") and not prev.get("interpolated"):
-            px, py = prev["center"]
-            cx, cy = current["center"]
-            jump = math.hypot(float(cx) - float(px), float(cy) - float(py))
-            if jump > args.end_jump_px:
-                break
-
+        # Selected-ball track IDs can switch at contact, near the player, or near
+        # court lines. Treat large jumps as handoffs and keep scanning until the
+        # selected ball actually disappears for a sustained gap.
         if not current.get("interpolated"):
             last_plausible = current["frame"]
         prev = current
