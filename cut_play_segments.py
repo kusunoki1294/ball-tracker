@@ -32,7 +32,43 @@ def parse_args():
         help="Keep one-bounce segments, useful for aces, faults, or very short points.",
     )
     parser.add_argument("--pre-roll-frames", type=int, default=90, help="Frames to include before first event.")
-    parser.add_argument("--post-roll-frames", type=int, default=30, help="Frames to include after last event.")
+    parser.add_argument("--post-roll-frames", type=int, default=30, help="Fallback frames to include after last event.")
+    parser.add_argument(
+        "--dynamic-end",
+        action="store_true",
+        default=True,
+        help="Infer segment ends from the selected ball trail after the last event.",
+    )
+    parser.add_argument(
+        "--fixed-end",
+        action="store_false",
+        dest="dynamic_end",
+        help="Use fixed post-roll only; disables dynamic selected-ball ending.",
+    )
+    parser.add_argument(
+        "--end-scan-frames",
+        type=int,
+        default=120,
+        help="Maximum frames after the last event to scan for active ball continuation.",
+    )
+    parser.add_argument(
+        "--end-dead-gap-frames",
+        type=int,
+        default=7,
+        help="End a point when selected ball frames disappear for at least this many frames.",
+    )
+    parser.add_argument(
+        "--end-jump-px",
+        type=float,
+        default=150.0,
+        help="End a point before an implausible selected-ball jump after the last event.",
+    )
+    parser.add_argument(
+        "--end-margin-frames",
+        type=int,
+        default=3,
+        help="Frames to keep after the last plausible selected-ball frame.",
+    )
     parser.add_argument(
         "--merge-gap-frames",
         type=int,
@@ -78,6 +114,7 @@ def read_tracking_log(path):
                     {
                         "frame": int(row["frame"]),
                         "center": ball.get("center"),
+                        "track_id": ball.get("track_id"),
                         "interpolated": bool(ball.get("interpolated")),
                     }
                 )
@@ -122,6 +159,45 @@ def attach_single_event_tails(groups, max_gap_frames):
     return attached
 
 
+def infer_segment_end(group, ball_frames, total_frames, args):
+    last_event_frame = group[-1]["event_frame"]
+    fallback_end = min(total_frames, last_event_frame + args.post_roll_frames)
+    if not args.dynamic_end:
+        return fallback_end
+
+    scan_end = min(total_frames, last_event_frame + max(args.post_roll_frames, args.end_scan_frames))
+    selected = [
+        frame
+        for frame in ball_frames
+        if last_event_frame <= frame["frame"] <= scan_end and frame.get("center") is not None
+    ]
+    if not selected:
+        return fallback_end
+
+    last_plausible = last_event_frame
+    prev = selected[0]
+    if not prev.get("interpolated"):
+        last_plausible = prev["frame"]
+
+    for current in selected[1:]:
+        frame_gap = current["frame"] - prev["frame"]
+        if frame_gap >= args.end_dead_gap_frames:
+            break
+
+        if not current.get("interpolated") and not prev.get("interpolated"):
+            px, py = prev["center"]
+            cx, cy = current["center"]
+            jump = math.hypot(float(cx) - float(px), float(cy) - float(py))
+            if jump > args.end_jump_px:
+                break
+
+        if not current.get("interpolated"):
+            last_plausible = current["frame"]
+        prev = current
+
+    return min(total_frames, max(last_event_frame + 1, last_plausible + args.end_margin_frames))
+
+
 def merge_segments(segments, merge_gap_frames):
     if not segments:
         return []
@@ -140,7 +216,7 @@ def merge_segments(segments, merge_gap_frames):
     return merged
 
 
-def build_segments(events, total_frames, args):
+def build_segments(events, ball_frames, total_frames, args):
     segments = []
     groups = group_events(events, args.max_event_gap_frames)
     groups = attach_single_event_tails(groups, args.attach_single_event_gap_frames)
@@ -148,7 +224,7 @@ def build_segments(events, total_frames, args):
         if len(group) < args.min_events and not args.keep_single_event_segments:
             continue
         start_frame = max(1, group[0]["event_frame"] - args.pre_roll_frames)
-        end_frame = min(total_frames, group[-1]["event_frame"] + args.post_roll_frames)
+        end_frame = infer_segment_end(group, ball_frames, total_frames, args)
         segments.append(
             {
                 "start_frame": start_frame,
@@ -240,8 +316,8 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    events, _ball_frames, total_frames = read_tracking_log(jsonl_path)
-    segments = annotate_times(build_segments(events, total_frames, args), args.fps)
+    events, ball_frames, total_frames = read_tracking_log(jsonl_path)
+    segments = annotate_times(build_segments(events, ball_frames, total_frames, args), args.fps)
     manifest_path = output_dir / "play_segments.json"
     write_manifest(manifest_path, video_path, jsonl_path, args.fps, total_frames, segments)
 
