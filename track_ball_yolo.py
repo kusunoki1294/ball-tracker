@@ -1440,6 +1440,8 @@ class EventDetector:
             else:
                 pattern = "far_rebound"
                 bounce_strength = max(vertical_change, pre_drop + post_rise, close_drop + close_rise)
+                if bounce_strength < max(28.0, vertical_threshold * 5.0):
+                    return None
                 if pre_drop < vertical_threshold * 0.35 or post_rise < vertical_threshold * 0.35:
                     return None
                 if close_drop < vertical_threshold * 0.10:
@@ -1467,6 +1469,8 @@ class EventDetector:
             "post_rise": round(post_rise, 1),
             "world_point": [round(world_point[0], 2), round(world_point[1], 2)] if world_point is not None else None,
         }
+        if self._is_duplicate_bounce(event):
+            return None
         self._record_event(event)
         self.last_bounce_frame = candidate_frame
         if near_recovered_bounce:
@@ -1707,6 +1711,31 @@ class EventDetector:
                 continue
             distinct.add((int(round(point[0])), int(round(point[1]))))
         return len(distinct)
+
+    def _is_duplicate_bounce(self, event):
+        if not self.bounces:
+            return False
+
+        side = event.get("side")
+        frame = event["frame"]
+        world_point = event.get("world_point")
+        previous = self.bounces[-1]
+        if previous.get("side") != side:
+            return False
+
+        frame_delta = frame - previous["frame"]
+        if frame_delta <= 0:
+            return True
+        if frame_delta > (90 if side == "far" else 55):
+            return False
+
+        previous_world = previous.get("world_point")
+        if world_point is None or previous_world is None:
+            return frame_delta <= (28 if side == "far" else 20)
+
+        world_distance = math.hypot(world_point[0] - previous_world[0], world_point[1] - previous_world[1])
+        distance_limit = 14.0 if side == "far" else 10.0
+        return world_distance <= distance_limit
 
     def _record_event(self, event):
         self.event_frames.add(event["frame"])
