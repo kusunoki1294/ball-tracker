@@ -8,6 +8,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Run tennis analysis and all configured render outputs.")
     parser.add_argument("--manifest", required=True, help="Analysis/render manifest JSON.")
     parser.add_argument("--skip-analysis", action="store_true", help="Render from the existing analysis JSON.")
+    parser.add_argument("--skip-audit", action="store_true", help="Skip audit CSV/summary/court-map exports.")
     parser.add_argument("--skip-render", action="store_true", help="Only regenerate the analysis JSON.")
     return parser.parse_args()
 
@@ -29,6 +30,15 @@ def render_jobs(manifest):
     return jobs
 
 
+def audit_config(manifest):
+    audit = manifest.get("audit")
+    if audit is None:
+        return None
+    if not isinstance(audit, dict):
+        raise ValueError("manifest field 'audit' must be an object")
+    return audit
+
+
 def main():
     args = parse_args()
     manifest = load_manifest(args.manifest)
@@ -38,6 +48,28 @@ def main():
 
     if not args.skip_analysis:
         run_command([sys.executable, "analyze_tennis_events.py", "--manifest", args.manifest])
+
+    audit = audit_config(manifest)
+    if audit and not args.skip_audit:
+        csv_path = audit.get("csv")
+        summary_json = audit.get("summary_json")
+        court_map = audit.get("court_map")
+        if not csv_path or not summary_json or not court_map:
+            raise ValueError("audit config must define 'csv', 'summary_json', and 'court_map'")
+        run_command(
+            [
+                sys.executable,
+                "export_tennis_audit.py",
+                "--analysis",
+                analysis_path,
+                "--csv",
+                csv_path,
+                "--summary-json",
+                summary_json,
+                "--court-map",
+                court_map,
+            ]
+        )
 
     if args.skip_render:
         return

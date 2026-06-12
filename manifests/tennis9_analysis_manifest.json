@@ -44,6 +44,11 @@
   ],
   "initial_game_score": "0-0",
   "initial_set_score": "0-0",
+  "audit": {
+    "csv": "yoloVids/outputs/tennis9/play_segments/ai9.5.audit.csv",
+    "summary_json": "yoloVids/outputs/tennis9/play_segments/ai9.5.audit.summary.json",
+    "court_map": "yoloVids/outputs/tennis9/play_segments/ai9.5.court_map.png"
+  },
   "renders": [
     {
       "name": "red_marks",

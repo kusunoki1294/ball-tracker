@@ -819,6 +819,55 @@ def shot_type_for_link(point_shot_index, player, server, receiver):
     return "groundstroke"
 
 
+def mark_dead_ball_candidates(raw_bounces, links, shots, point_ranges):
+    links_by_bounce = {link["bounce_id"]: link for link in links}
+    shots_by_id = {shot["id"]: shot for shot in shots}
+    bounces_by_point = {}
+    for bounce in raw_bounces:
+        bounces_by_point.setdefault(bounce.get("point_index"), []).append(bounce)
+
+    for bounce in raw_bounces:
+        reasons = []
+        review_reasons = []
+        if not bounce.get("live"):
+            reasons.append("already_excluded")
+        link = links_by_bounce.get(bounce.get("id"))
+        shot = shots_by_id.get(link.get("shot_id")) if link else None
+        if link is None and bounce.get("live"):
+            reasons.append("no_live_shot_link")
+        if link and link.get("quality") in {"low", "missing"}:
+            review_reasons.append("low_link_quality")
+        if shot:
+            speed = shot.get("speed") or {}
+            if shot.get("stroke_confidence") == "low":
+                review_reasons.append("low_stroke_confidence")
+            if speed.get("quality") in {"low", "missing"}:
+                review_reasons.append("low_speed_quality")
+
+        point_bounces = bounces_by_point.get(bounce.get("point_index")) or []
+        live_point_bounces = [item for item in point_bounces if item.get("live")]
+        live_index = None
+        for index, item in enumerate(live_point_bounces, start=1):
+            if item.get("id") == bounce.get("id"):
+                live_index = index
+                break
+        if live_index == 1 and link:
+            shot_type = link.get("shot_type")
+            shot_player = link.get("player")
+            if shot_type != "serve" and shot_player != "near" and bounce.get("side") == "near":
+                reasons.append("nonserve_first_bounce_near_side")
+        if bounce.get("point_index") is None:
+            reasons.append("outside_point_range")
+        if point_ranges and bounce.get("point_index") is not None:
+            point_range = point_ranges[bounce["point_index"] - 1]
+            if bounce["frame"] - point_range["start_frame"] < 45 and live_index and live_index > 1:
+                reasons.append("early_multi_bounce_sequence")
+
+        bounce["dead_ball_candidate"] = bool(reasons)
+        bounce["dead_ball_reasons"] = sorted(set(reasons))
+        bounce["review_reasons"] = sorted(set(review_reasons))
+
+
 def build_analysis(rows, args):
     court_calib = load_court_calibration(args.court_calib_file)
     inv_homography = build_inverse_court_homography(court_calib)
@@ -939,6 +988,8 @@ def build_analysis(rows, args):
         bounce.update(bounce_record)
         previous_bounce_frame = bounce["frame"]
         previous_bounce_record = bounce
+
+    mark_dead_ball_candidates(raw_bounces, links, shots, point_ranges)
 
     points = []
     player_order = [args.server_player, args.receiver_player]
