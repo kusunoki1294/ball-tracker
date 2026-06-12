@@ -73,15 +73,21 @@ def match_scores_for_display(point, show_result):
         return "Games 0-0  Sets 0-0"
     game_score = point.get("game_score_after") if show_result else point.get("game_score_before")
     set_score = point.get("set_score_after") if show_result else point.get("set_score_before")
-    return f"Games {game_score or '0-0'}  Sets {set_score or '0-0'}"
+    tiebreak = point.get("tiebreak_after") if show_result else point.get("tiebreak_before")
+    prefix = "TB  " if tiebreak else ""
+    return f"{prefix}Games {game_score or '0-0'}  Sets {set_score or '0-0'}"
 
 
 def shot_label(shot):
-    stroke = {"forehand": "FH", "backhand": "BH", "body": "BODY"}.get(shot.get("stroke_side"), "SHOT")
+    stroke_confidence = shot.get("stroke_confidence")
+    if stroke_confidence in {"medium", "high"}:
+        stroke = {"forehand": "FH", "backhand": "BH", "body": "BODY"}.get(shot.get("stroke_side"), "SHOT")
+    else:
+        stroke = "SHOT"
     shot_type = {"opening_shot": "opening"}.get(shot.get("type"), shot.get("type") or "shot")
     speed_info = shot.get("speed", {})
     mph = speed_info.get("mph")
-    show_speed = speed_info.get("quality") in {"medium", "high"}
+    show_speed = speed_info.get("quality") == "high"
     speed = f" {mph:.0f} mph" if show_speed and isinstance(mph, (int, float)) else ""
     return f"{stroke} {shot_type}{speed}"
 

@@ -29,8 +29,9 @@ FT_PER_SEC_TO_KMH = 1.09728
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Post-process tennis tracking logs into shots, bounces, and score.")
-    parser.add_argument("--jsonl", required=True, help="Input tracking JSONL from track_ball_yolo.py.")
-    parser.add_argument("--output", required=True, help="Output analysis JSON path.")
+    parser.add_argument("--manifest", default="", help="Optional JSON manifest with analysis inputs and overrides.")
+    parser.add_argument("--jsonl", default="", help="Input tracking JSONL from track_ball_yolo.py.")
+    parser.add_argument("--output", default="", help="Output analysis JSON path.")
     parser.add_argument(
         "--court-calib-file",
         default="yoloVids/calibration/court_calib_tennis7.json",
@@ -53,6 +54,16 @@ def parse_args():
         choices=["near", "far"],
         default="far",
         help="Initial receiver side.",
+    )
+    parser.add_argument(
+        "--server-player",
+        default="server",
+        help="Stable player ID/name for the player serving the first tracked game.",
+    )
+    parser.add_argument(
+        "--receiver-player",
+        default="receiver",
+        help="Stable player ID/name for the player receiving the first tracked game.",
     )
     parser.add_argument(
         "--near-handedness",
@@ -103,7 +114,83 @@ def parse_args():
         default="0-0",
         help="Starting sets, in server-receiver order.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.manifest:
+        args = apply_manifest(args, args.manifest)
+    if not args.jsonl:
+        parser.error("--jsonl is required unless provided by --manifest")
+    if not args.output:
+        parser.error("--output is required unless provided by --manifest")
+    return args
+
+
+def apply_manifest(args, manifest_path):
+    with open(manifest_path, "r", encoding="utf-8") as handle:
+        manifest = json.load(handle)
+    field_map = {
+        "jsonl": "jsonl",
+        "output": "output",
+        "court_calib_file": "court_calib_file",
+        "fps": "fps",
+        "point_frames": "point_frames",
+        "point_winners": "point_winners",
+        "server": "server",
+        "receiver": "receiver",
+        "server_player": "server_player",
+        "receiver_player": "receiver_player",
+        "near_handedness": "near_handedness",
+        "far_handedness": "far_handedness",
+        "max_shot_search_frames": "max_shot_search_frames",
+        "auto_score": "auto_score",
+        "ignore_bounces_before_frame": "ignore_bounces_before_frame",
+        "official_double_fault_points": "official_double_fault_points",
+        "exclude_bounce_frames": "exclude_bounce_frames",
+        "initial_game_score": "initial_game_score",
+        "initial_set_score": "initial_set_score",
+    }
+    defaults = {
+        "jsonl": "",
+        "output": "",
+        "court_calib_file": "yoloVids/calibration/court_calib_tennis7.json",
+        "fps": FPS_DEFAULT,
+        "point_frames": "",
+        "point_winners": "",
+        "server": "near",
+        "receiver": "far",
+        "server_player": "server",
+        "receiver_player": "receiver",
+        "near_handedness": "right",
+        "far_handedness": "right",
+        "max_shot_search_frames": 150,
+        "auto_score": False,
+        "ignore_bounces_before_frame": 0,
+        "official_double_fault_points": "",
+        "exclude_bounce_frames": "",
+        "initial_game_score": "0-0",
+        "initial_set_score": "0-0",
+    }
+    for manifest_key, attr in field_map.items():
+        if manifest_key not in manifest:
+            continue
+        current = getattr(args, attr)
+        if current != defaults[attr]:
+            continue
+        setattr(args, attr, manifest_value_to_arg(manifest[manifest_key]))
+    return args
+
+
+def manifest_value_to_arg(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, list):
+        if not value:
+            return ""
+        if all(isinstance(item, dict) and "start_frame" in item and "end_frame" in item for item in value):
+            return ",".join(f"{item['start_frame']}-{item['end_frame']}" for item in value)
+        return ",".join(str(item) for item in value)
+    return value
 
 
 def read_tracking_log(path):
@@ -335,11 +422,11 @@ def find_shot_for_bounce(rows, frame_numbers, bounce, previous_bounce_frame, poi
     return best
 
 
-def infer_stroke_side(shot, row, handedness):
+def infer_stroke(shot, row, handedness):
     if shot.get("point") is None:
-        return "unknown"
+        return {"side": "unknown", "confidence": "missing", "reason": "missing_contact"}
     if shot.get("quality") not in {"high", "medium"}:
-        return "unknown"
+        return {"side": "unknown", "confidence": "low", "reason": "low_shot_quality"}
     debug = shot.get("debug") or shot
     racket_distance_px = debug.get("racket_distance_px")
     if racket_distance_px is None or racket_distance_px > 80.0:
@@ -347,25 +434,40 @@ def infer_stroke_side(shot, row, handedness):
         if not world_point_in_bounds(world_point, margin=8.0) or not world_point_on_player_side(
             world_point, shot["player"], margin=10.0
         ):
-            return "unknown"
+            return {"side": "unknown", "confidence": "low", "reason": "contact_not_on_player_side"}
     player = get_player(row, shot["player"]) if row else None
     center = player_center(player)
     if center is None:
-        return "unknown"
+        return {"side": "unknown", "confidence": "missing", "reason": "missing_player"}
     contact_x = shot["point"][0]
     racket_bbox = debug.get("racket_bbox")
+    used_racket = False
     if racket_bbox is not None and racket_distance_px is not None and racket_distance_px <= 80.0:
         contact_x = (racket_bbox[0] + racket_bbox[2]) / 2.0
+        used_racket = True
     player_x = center[0]
-    if abs(contact_x - player_x) < 14.0:
-        return "body"
+    offset = abs(contact_x - player_x)
+    if offset < 14.0:
+        confidence = "high" if used_racket and racket_distance_px <= 45.0 else "medium"
+        return {"side": "body", "confidence": confidence, "reason": "center_contact"}
+    if offset < 28.0 and not used_racket:
+        return {"side": "unknown", "confidence": "low", "reason": "small_offset_without_racket"}
     if shot["player"] == "near":
         right_side_contact = contact_x > player_x
     else:
         right_side_contact = contact_x < player_x
     if handedness == "left":
         right_side_contact = not right_side_contact
-    return "forehand" if right_side_contact else "backhand"
+    confidence = "high" if used_racket and racket_distance_px <= 55.0 else "medium"
+    return {
+        "side": "forehand" if right_side_contact else "backhand",
+        "confidence": confidence,
+        "reason": "racket_contact" if used_racket else "ball_player_offset",
+    }
+
+
+def infer_stroke_side(shot, row, handedness):
+    return infer_stroke(shot, row, handedness)["side"]
 
 
 def estimate_bounce_interval_speed(previous_bounce, bounce, fps):
@@ -412,6 +514,8 @@ def estimate_speed(shot, bounce, previous_bounce, fps):
         fallback["contact_rejected"] = True
         fallback["rejected_contact_mph"] = round(mph, 1)
         return fallback
+    elif shot.get("quality") == "high" and frame_delta <= 75:
+        quality = "high"
     elif shot.get("quality") in {"high", "medium"} and frame_delta <= 90:
         quality = "medium"
     else:
@@ -431,7 +535,9 @@ def tennis_score_label(points_won):
     return labels[points_won] if points_won < len(labels) else "40"
 
 
-def format_score(score, server, receiver):
+def format_score(score, server, receiver, tiebreak=False):
+    if tiebreak:
+        return f"{score[server]}-{score[receiver]}"
     server_points = score[server]
     receiver_points = score[receiver]
     if server_points >= 3 and receiver_points >= 3:
@@ -448,21 +554,51 @@ def format_side_score(score, server, receiver):
     return f"{score[server]}-{score[receiver]}"
 
 
-def game_winner_for_points(score, winner):
+def format_ordered_score(score, order):
+    return f"{score[order[0]]}-{score[order[1]]}"
+
+
+def opposing_player(player, player_order):
+    return player_order[1] if player == player_order[0] else player_order[0]
+
+
+def invert_mapping(mapping):
+    return {value: key for key, value in mapping.items()}
+
+
+def should_change_ends(games):
+    return sum(games.values()) % 2 == 1
+
+
+def game_winner_for_points(score, winner, player_order=None):
     if winner is None:
         return None
-    loser = side_opponent(winner)
+    loser = opposing_player(winner, player_order) if player_order else side_opponent(winner)
     if score[winner] >= 4 and score[winner] - score[loser] >= 2:
         return winner
     return None
 
 
-def set_winner_for_games(games, game_winner):
+def set_winner_for_games(games, game_winner, player_order=None):
     if game_winner is None:
         return None
-    loser = side_opponent(game_winner)
+    loser = opposing_player(game_winner, player_order) if player_order else side_opponent(game_winner)
     if games[game_winner] >= 6 and games[game_winner] - games[loser] >= 2:
         return game_winner
+    return None
+
+
+def is_tiebreak_game(games):
+    values = list(games.values())
+    return len(values) == 2 and values[0] == 6 and values[1] == 6
+
+
+def tiebreak_winner_for_points(score, winner, player_order=None):
+    if winner is None:
+        return None
+    loser = opposing_player(winner, player_order) if player_order else side_opponent(winner)
+    if score[winner] >= 7 and score[winner] - score[loser] >= 2:
+        return winner
     return None
 
 
@@ -757,7 +893,8 @@ def build_analysis(rows, args):
         shot_row = by_frame.get(shot["frame"])
         point_shot_counts[point_index] = point_shot_counts.get(point_index, 0) + 1
         shot_type = shot_type_for_link(point_shot_counts[point_index], shot["player"], args.server, args.receiver)
-        stroke_side = infer_stroke_side(shot, shot_row, handedness)
+        stroke = infer_stroke(shot, shot_row, handedness)
+        stroke_side = stroke["side"]
         speed = estimate_speed(shot, bounce, previous_bounce_record, args.fps)
         shot_id = f"shot_{shot_index:03d}"
         bounce_id = bounce["id"]
@@ -768,6 +905,8 @@ def build_analysis(rows, args):
             "point": shot.get("point"),
             "world_point": shot.get("world_point"),
             "stroke_side": stroke_side,
+            "stroke_confidence": stroke["confidence"],
+            "stroke_reason": stroke["reason"],
             "type": shot_type,
             "speed": speed,
             "quality": shot.get("quality"),
@@ -790,6 +929,7 @@ def build_analysis(rows, args):
                 "bounce_frame": bounce["frame"],
                 "player": shot_record["player"],
                 "stroke_side": stroke_side,
+                "stroke_confidence": stroke["confidence"],
                 "shot_type": shot_type,
                 "speed_mph": speed["mph"],
                 "quality": min_quality(shot_record["quality"], speed["quality"]),
@@ -801,27 +941,48 @@ def build_analysis(rows, args):
         previous_bounce_record = bounce
 
     points = []
-    point_score = {"near": 0, "far": 0}
+    player_order = [args.server_player, args.receiver_player]
+    point_score = {player: 0 for player in player_order}
     initial_games = parse_score_pair(args.initial_game_score, "--initial-game-score")
     initial_sets = parse_score_pair(args.initial_set_score, "--initial-set-score")
     game_score = {
-        args.server: initial_games["server"],
-        args.receiver: initial_games["receiver"],
+        args.server_player: initial_games["server"],
+        args.receiver_player: initial_games["receiver"],
     }
     set_score = {
-        args.server: initial_sets["server"],
-        args.receiver: initial_sets["receiver"],
+        args.server_player: initial_sets["server"],
+        args.receiver_player: initial_sets["receiver"],
     }
+    side_to_player = {
+        args.server: args.server_player,
+        args.receiver: args.receiver_player,
+    }
+    games = []
+    current_game_start_point = 1
     for index, point_range in enumerate(point_ranges, start=1):
-        point_score_before = format_score(point_score, args.server, args.receiver)
-        game_score_before = format_side_score(game_score, args.server, args.receiver)
-        set_score_before = format_side_score(set_score, args.server, args.receiver)
+        completed_games = sum(game_score.values())
+        game_index = completed_games + 1
+        current_server_player = player_order[completed_games % 2]
+        current_receiver_player = opposing_player(current_server_player, player_order)
+        player_to_side = invert_mapping(side_to_player)
+        current_server_side = player_to_side[current_server_player]
+        current_receiver_side = player_to_side[current_receiver_player]
+        tiebreak_before = is_tiebreak_game(game_score)
+        point_score_before = format_score(
+            point_score,
+            current_server_player,
+            current_receiver_player,
+            tiebreak=tiebreak_before,
+        )
+        game_score_before = format_ordered_score(game_score, player_order)
+        set_score_before = format_ordered_score(set_score, player_order)
+        side_to_player_before = dict(side_to_player)
         point_links = [link for link in links if link["point_index"] == index]
         point_bounces = [bounce for bounce in live_bounces if bounce.get("point_index") == index]
         serve_analysis = infer_serve_sequence(
             point_bounces,
-            args.server,
-            args.receiver,
+            current_server_side,
+            current_receiver_side,
             official_double_fault=index in official_double_fault_points,
         )
         terminal_state = terminal_ball_state(rows, point_range, inv_homography)
@@ -835,29 +996,91 @@ def build_analysis(rows, args):
         else:
             winner = manual_winner
             winner_source = "manual" if manual_winner else None
+        winner_player = side_to_player.get(winner) if winner else None
         game_winner = None
         set_winner = None
-        if winner:
-            point_score[winner] += 1
-            game_winner = game_winner_for_points(point_score, winner)
-            if game_winner:
-                game_score[game_winner] += 1
-                set_winner = set_winner_for_games(game_score, game_winner)
-                if set_winner:
+        tiebreak_winner = None
+        changeover_after = False
+        if winner_player:
+            point_score[winner_player] += 1
+            if tiebreak_before:
+                tiebreak_winner = tiebreak_winner_for_points(point_score, winner_player, player_order)
+                if tiebreak_winner:
+                    game_score[tiebreak_winner] += 1
+                    game_winner = tiebreak_winner
+                    set_winner = tiebreak_winner
                     set_score[set_winner] += 1
-                point_score = {"near": 0, "far": 0}
-            score_after = format_score(point_score, args.server, args.receiver)
+                    point_score = {player: 0 for player in player_order}
+            else:
+                game_winner = game_winner_for_points(point_score, winner_player, player_order)
+                if game_winner:
+                    game_score[game_winner] += 1
+                    set_winner = set_winner_for_games(game_score, game_winner, player_order)
+                    if set_winner:
+                        set_score[set_winner] += 1
+                    point_score = {player: 0 for player in player_order}
+            tiebreak_after = is_tiebreak_game(game_score)
+            if set_winner:
+                point_score = {player: 0 for player in player_order}
+                tiebreak_after = False
+            if game_winner and should_change_ends(game_score):
+                side_to_player = {
+                    "near": side_to_player["far"],
+                    "far": side_to_player["near"],
+                }
+                changeover_after = True
+            score_after = format_score(
+                point_score,
+                current_server_player,
+                current_receiver_player,
+                tiebreak=tiebreak_after,
+            )
         else:
             score_after = None
-        game_score_after = format_side_score(game_score, args.server, args.receiver)
-        set_score_after = format_side_score(set_score, args.server, args.receiver)
+            tiebreak_after = tiebreak_before
+        game_score_after = format_ordered_score(game_score, player_order)
+        set_score_after = format_ordered_score(set_score, player_order)
+        next_completed_games = sum(game_score.values())
+        next_server_player = player_order[next_completed_games % 2]
+        next_receiver_player = opposing_player(next_server_player, player_order)
+        next_player_to_side = invert_mapping(side_to_player)
+        next_server_side = next_player_to_side.get(next_server_player)
+        next_receiver_side = next_player_to_side.get(next_receiver_player)
+        if game_winner:
+            games.append(
+                {
+                    "index": game_index,
+                    "start_point_index": current_game_start_point,
+                    "end_point_index": index,
+                    "server": current_server_side,
+                    "receiver": current_receiver_side,
+                    "server_player": current_server_player,
+                    "receiver_player": current_receiver_player,
+                    "winner_player": game_winner,
+                    "score_before": game_score_before,
+                    "score_after": game_score_after,
+                    "set_score_after": set_score_after,
+                    "changeover_after": changeover_after,
+                    "side_to_player_after": dict(side_to_player),
+                    "next_server": next_server_side,
+                    "next_receiver": next_receiver_side,
+                    "next_server_player": next_server_player,
+                    "next_receiver_player": next_receiver_player,
+                    "tiebreak": bool(tiebreak_before),
+                }
+            )
+            current_game_start_point = index + 1
         points.append(
             {
                 "index": index,
                 **point_range,
-                "server": args.server,
-                "receiver": args.receiver,
+                "server": current_server_side,
+                "receiver": current_receiver_side,
+                "server_player": current_server_player,
+                "receiver_player": current_receiver_player,
+                "side_to_player_before": side_to_player_before,
                 "winner": winner,
+                "winner_player": winner_player,
                 "winner_source": winner_source,
                 "point_end_reason": point_end_reason,
                 "terminal_ball": terminal_state,
@@ -865,12 +1088,22 @@ def build_analysis(rows, args):
                 "serve_analysis": serve_analysis,
                 "point_score_before": point_score_before,
                 "score_after": score_after,
+                "tiebreak_before": tiebreak_before,
+                "tiebreak_after": tiebreak_after,
                 "game_score_before": game_score_before,
                 "game_score_after": game_score_after,
                 "set_score_before": set_score_before,
                 "set_score_after": set_score_after,
+                "game_index": game_index,
                 "game_winner": game_winner,
                 "set_winner": set_winner,
+                "tiebreak_winner": tiebreak_winner,
+                "changeover_after": changeover_after,
+                "next_server": next_server_side if game_winner else None,
+                "next_receiver": next_receiver_side if game_winner else None,
+                "next_server_player": next_server_player if game_winner else None,
+                "next_receiver_player": next_receiver_player if game_winner else None,
+                "side_to_player_after": dict(side_to_player),
                 "bounce_count": len(point_links),
                 "shot_ids": [link["shot_id"] for link in point_links],
                 "bounce_ids": [link["bounce_id"] for link in point_links],
@@ -882,6 +1115,11 @@ def build_analysis(rows, args):
         "court_calib_file": args.court_calib_file,
         "fps": args.fps,
         "players": {
+            "order": player_order,
+            "initial_side_to_player": {
+                args.server: args.server_player,
+                args.receiver: args.receiver_player,
+            },
             "near": {"handedness": args.near_handedness},
             "far": {"handedness": args.far_handedness},
         },
@@ -893,11 +1131,13 @@ def build_analysis(rows, args):
             "shots": len(shots),
             "points": len(points),
             "scoring_mode": "auto_with_manual_fallback" if args.auto_score else ("manual_point_winners" if winners else "none"),
-            "final_point_score": points[-1]["score_after"] if points and points[-1].get("score_after") else format_score(point_score, args.server, args.receiver),
-            "final_game_score": format_side_score(game_score, args.server, args.receiver),
-            "final_set_score": format_side_score(set_score, args.server, args.receiver),
+            "final_point_score": points[-1]["score_after"] if points and points[-1].get("score_after") else format_score(point_score, player_order[0], player_order[1]),
+            "final_game_score": format_ordered_score(game_score, player_order),
+            "final_set_score": format_ordered_score(set_score, player_order),
+            "completed_games": len(games),
         },
         "points": points,
+        "games": games,
         "bounces": raw_bounces,
         "live_bounce_ids": [bounce["id"] for bounce in live_bounces],
         "excluded_bounces": [bounce for bounce in raw_bounces if not bounce.get("live")],

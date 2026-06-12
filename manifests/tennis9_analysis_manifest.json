@@ -1,0 +1,61 @@
+{
+  "jsonl": "yoloVids/outputs/tennis9/play_segments/ai9.3.jsonl",
+  "output": "yoloVids/outputs/tennis9/play_segments/ai9.5.analysis.json",
+  "court_calib_file": "yoloVids/calibration/court_calib_tennis7.json",
+  "fps": 30.0,
+  "point_frames": [
+    {
+      "start_frame": 92,
+      "end_frame": 1152
+    },
+    {
+      "start_frame": 1153,
+      "end_frame": 1545
+    },
+    {
+      "start_frame": 1546,
+      "end_frame": 1851
+    },
+    {
+      "start_frame": 1852,
+      "end_frame": 2181
+    }
+  ],
+  "point_winners": [
+    "near",
+    "near",
+    "near",
+    "near"
+  ],
+  "server": "far",
+  "receiver": "near",
+  "server_player": "far_player",
+  "receiver_player": "near_player",
+  "near_handedness": "right",
+  "far_handedness": "right",
+  "auto_score": true,
+  "ignore_bounces_before_frame": 92,
+  "official_double_fault_points": [
+    3,
+    4
+  ],
+  "exclude_bounce_frames": [
+    1243
+  ],
+  "initial_game_score": "0-0",
+  "initial_set_score": "0-0",
+  "renders": [
+    {
+      "name": "red_marks",
+      "video": "yoloVids/outputs/tennis9/play_segments/ai9.3.avi",
+      "analysis": "yoloVids/outputs/tennis9/play_segments/ai9.5.analysis.json",
+      "output": "yoloVids/outputs/tennis9/play_segments/ai9.5.avi"
+    },
+    {
+      "name": "clean",
+      "video": "yoloVids/outputs/tennis9/play_segments/tennis9_in_play.avi",
+      "analysis": "yoloVids/outputs/tennis9/play_segments/ai9.5.analysis.json",
+      "output": "yoloVids/outputs/tennis9/play_segments/ai9.6.avi"
+    }
+  ]
+}

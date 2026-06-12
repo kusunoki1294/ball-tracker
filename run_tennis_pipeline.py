@@ -1,0 +1,70 @@
+import argparse
+import json
+import subprocess
+import sys
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run tennis analysis and all configured render outputs.")
+    parser.add_argument("--manifest", required=True, help="Analysis/render manifest JSON.")
+    parser.add_argument("--skip-analysis", action="store_true", help="Render from the existing analysis JSON.")
+    parser.add_argument("--skip-render", action="store_true", help="Only regenerate the analysis JSON.")
+    return parser.parse_args()
+
+
+def load_manifest(path):
+    with open(path, "r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def run_command(command):
+    print("+", " ".join(command), flush=True)
+    subprocess.run(command, check=True)
+
+
+def render_jobs(manifest):
+    jobs = manifest.get("renders") or []
+    if not isinstance(jobs, list):
+        raise ValueError("manifest field 'renders' must be a list")
+    return jobs
+
+
+def main():
+    args = parse_args()
+    manifest = load_manifest(args.manifest)
+    analysis_path = manifest.get("output")
+    if not analysis_path:
+        raise ValueError("manifest must define an analysis 'output' path")
+
+    if not args.skip_analysis:
+        run_command([sys.executable, "analyze_tennis_events.py", "--manifest", args.manifest])
+
+    if args.skip_render:
+        return
+
+    jobs = render_jobs(manifest)
+    if not jobs:
+        raise ValueError("manifest does not define any render jobs")
+
+    for job in jobs:
+        video = job.get("video")
+        output = job.get("output")
+        analysis = job.get("analysis") or analysis_path
+        if not video or not output:
+            raise ValueError("each render job must define 'video' and 'output'")
+        run_command(
+            [
+                sys.executable,
+                "render_tennis_analysis.py",
+                "--video",
+                video,
+                "--analysis",
+                analysis,
+                "--output",
+                output,
+            ]
+        )
+
+
+if __name__ == "__main__":
+    main()
