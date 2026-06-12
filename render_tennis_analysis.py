@@ -195,9 +195,17 @@ def main():
         draw_text(frame, match_score, (34, 118), scale=0.56, color=(220, 230, 240))
         if show_result:
             reason = active_point.get("point_end_reason")
+            end_type = active_point.get("point_end_type")
+            confident_end_type = active_point.get("point_end_confidence") in {"medium", "high"}
             result_text = f"Point won: {active_point['winner']}"
             if reason == "double_fault":
                 result_text = "Double fault"
+            elif confident_end_type and end_type == "forced_error_out":
+                result_text = f"Won: {active_point['winner']} (forced out)"
+            elif confident_end_type and end_type == "unforced_error_out":
+                result_text = f"Won: {active_point['winner']} (unforced out)"
+            elif confident_end_type and end_type == "net_error":
+                result_text = f"Won: {active_point['winner']} (net)"
             elif reason == "out":
                 result_text = f"Won: {active_point['winner']} (out)"
             elif active_point.get("serve_status") == "geometric_double_fault_played_out":

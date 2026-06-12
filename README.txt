@@ -78,6 +78,15 @@ Basic run:
 
 python track_ball_yolo.py --video yoloVids/tennis6.MOV --output yoloVids/annotated6.avi --headless
 
+Tennis analysis pipeline
+Run the tracked tennis9 analysis, audit exports, and configured overlay renders:
+
+python run_tennis_pipeline.py --manifest manifests/tennis9_analysis_manifest.json
+
+After regenerating tennis9 outputs, validate the known-good scoring and point-ending behavior:
+
+python validate_tennis9_regression.py
+
 Use a custom scene model:
 
 python track_ball_yolo.py --video yoloVids/tennis6.MOV --scene-model /path/to/model.pt --output yoloVids/annotated6.avi --headless

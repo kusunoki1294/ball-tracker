@@ -658,6 +658,29 @@ def classify_serve_attempt(bounce, server, receiver, attempt_number):
     }
 
 
+def serve_state_result(
+    status,
+    point_end_reason,
+    inferred_winner,
+    attempts,
+    state,
+    confidence,
+    reasons,
+    **extra,
+):
+    result = {
+        "status": status,
+        "state": state,
+        "confidence": confidence,
+        "reasons": reasons,
+        "point_end_reason": point_end_reason,
+        "inferred_winner": inferred_winner,
+        "attempts": attempts,
+    }
+    result.update(extra)
+    return result
+
+
 def infer_serve_sequence(point_bounces, server, receiver, official_double_fault=False):
     attempts = []
     for bounce in point_bounces[:2]:
@@ -669,58 +692,81 @@ def infer_serve_sequence(point_bounces, server, receiver, official_double_fault=
             break
 
     if not attempts:
-        return {
-            "status": "unknown",
-            "point_end_reason": None,
-            "inferred_winner": None,
-            "attempts": [],
-        }
+        return serve_state_result(
+            "unknown",
+            None,
+            None,
+            [],
+            "waiting_for_serve",
+            "low",
+            ["no_live_bounces_for_point"],
+        )
     if len(attempts) >= 2 and attempts[0]["result"] == "fault" and attempts[1]["result"] == "fault":
         post_second_serve_bounces = max(0, len(point_bounces) - 2)
         if official_double_fault or post_second_serve_bounces <= 1:
-            return {
-                "status": "double_fault",
-                "point_end_reason": "double_fault",
-                "inferred_winner": receiver,
-                "attempts": attempts,
-                "post_second_serve_bounces": post_second_serve_bounces,
-                "official_override": bool(official_double_fault),
-            }
-        return {
-            "status": "geometric_double_fault_played_out",
-            "point_end_reason": None,
-            "inferred_winner": None,
-            "attempts": attempts,
-            "post_second_serve_bounces": post_second_serve_bounces,
-            "official_override": False,
-        }
+            confidence = "high" if official_double_fault else "medium"
+            reasons = ["official_double_fault_override"] if official_double_fault else ["two_fault_bounces_no_rally"]
+            return serve_state_result(
+                "double_fault",
+                "double_fault",
+                receiver,
+                attempts,
+                "double_fault",
+                confidence,
+                reasons,
+                post_second_serve_bounces=post_second_serve_bounces,
+                official_override=bool(official_double_fault),
+            )
+        return serve_state_result(
+            "geometric_double_fault_played_out",
+            None,
+            None,
+            attempts,
+            "played_out_after_geometric_fault",
+            "low",
+            ["two_geometric_faults_but_rally_continued"],
+            post_second_serve_bounces=post_second_serve_bounces,
+            official_override=False,
+        )
     if attempts[0]["result"] == "fault" and len(attempts) >= 2 and attempts[1]["result"] == "in":
-        return {
-            "status": "second_serve_in",
-            "point_end_reason": None,
-            "inferred_winner": None,
-            "attempts": attempts,
-        }
+        return serve_state_result(
+            "second_serve_in",
+            None,
+            None,
+            attempts,
+            "second_serve_in",
+            "high",
+            ["first_fault_then_second_serve_in"],
+        )
     if attempts[0]["result"] == "fault":
-        return {
-            "status": "first_serve_fault",
-            "point_end_reason": None,
-            "inferred_winner": None,
-            "attempts": attempts,
-        }
+        return serve_state_result(
+            "first_serve_fault",
+            None,
+            None,
+            attempts,
+            "first_serve_fault",
+            "medium",
+            ["first_serve_landed_out"],
+        )
     if attempts[0]["result"] == "in":
-        return {
-            "status": "serve_in",
-            "point_end_reason": None,
-            "inferred_winner": None,
-            "attempts": attempts,
-        }
-    return {
-        "status": "unknown",
-        "point_end_reason": None,
-        "inferred_winner": None,
-        "attempts": attempts,
-    }
+        return serve_state_result(
+            "serve_in",
+            None,
+            None,
+            attempts,
+            "first_serve_in",
+            "high",
+            ["first_serve_landed_in"],
+        )
+    return serve_state_result(
+        "unknown",
+        None,
+        None,
+        attempts,
+        "unknown",
+        "low",
+        ["serve_attempt_unknown"],
+    )
 
 
 def point_for_frame(point_ranges, frame):
@@ -808,6 +854,169 @@ def terminal_ball_state(rows, point_range, inv_homography):
         "last_ball_frame": int(last["frame"]),
         "last_center": last_center,
         "last_world_point": [round(last_world[0], 2), round(last_world[1], 2)] if last_world else None,
+    }
+
+
+def infer_terminal_contact(rows, point_range, terminal_state, after_frame, inv_homography):
+    terminal_frame = terminal_state.get("last_ball_frame") or point_range["end_frame"]
+    search_start = max(point_range["start_frame"], (after_frame or point_range["start_frame"]) + 1, terminal_frame - 120)
+    search_end = min(point_range["end_frame"], terminal_frame)
+    best = None
+    for row in rows:
+        frame = int(row["frame"])
+        if frame < search_start or frame > search_end:
+            continue
+        ball = row.get("ball")
+        if not ball:
+            continue
+        point = ball_contact_point(ball) or ball.get("center")
+        if point is None:
+            continue
+        world_point = project_to_court_world(point, inv_homography)
+        row_side = side_for_world(world_point)
+        for side in ("near", "far"):
+            player = get_player(row, side)
+            zone = expanded_strike_zone(player, side)
+            if zone is None:
+                continue
+            player_distance = point_to_bbox_distance(point, zone)
+            nearest = nearest_racket(row, point)
+            racket_distance_px = nearest["distance"] if nearest else None
+            racket_score = min(racket_distance_px if racket_distance_px is not None else 120.0, 120.0) * 0.55
+            side_bonus = 0.0 if row_side in {None, side} else 22.0
+            recency = (search_end - frame) * 0.08
+            score = player_distance + racket_score + side_bonus + recency
+            quality = "low"
+            if racket_distance_px is not None and racket_distance_px <= 60.0 and player_distance <= 45.0:
+                quality = "high"
+            elif player_distance <= 65.0 or (racket_distance_px is not None and racket_distance_px <= 85.0):
+                quality = "medium"
+            candidate = {
+                "frame": frame,
+                "player": side,
+                "point": [round(float(point[0]), 1), round(float(point[1]), 1)],
+                "world_point": [round(world_point[0], 2), round(world_point[1], 2)] if world_point else None,
+                "quality": quality,
+                "score": round(score, 2),
+                "player_distance_px": round(player_distance, 1),
+                "racket_distance_px": round(racket_distance_px, 1) if racket_distance_px is not None else None,
+            }
+            if best is None or score < best["score"]:
+                best = candidate
+    if best is None:
+        return {
+            "player": None,
+            "quality": "missing",
+            "reason": "no_terminal_contact_candidate",
+            "search_range": [search_start, search_end],
+        }
+    if best["quality"] == "low":
+        best["reason"] = "weak_terminal_contact_candidate"
+    else:
+        best["reason"] = "terminal_contact_candidate"
+    best["search_range"] = [search_start, search_end]
+    return best
+
+
+def pressure_from_previous_shot(previous_shot, previous_bounce):
+    reasons = []
+    if not previous_shot:
+        return {"forced": False, "reasons": ["missing_previous_shot"]}
+    speed = previous_shot.get("speed") or {}
+    if quality_at_least(speed.get("quality"), "medium") and (speed.get("mph") or 0) >= 40.0:
+        reasons.append("previous_shot_fast")
+    world = (previous_bounce or {}).get("world_point")
+    if world:
+        xw, yw = world
+        if xw <= SINGLES_LEFT_FT + 2.0 or xw >= SINGLES_RIGHT_FT - 2.0:
+            reasons.append("previous_bounce_wide")
+        if yw <= 6.0 or yw >= 72.0:
+            reasons.append("previous_bounce_deep")
+    return {"forced": bool(reasons), "reasons": reasons or ["no_pressure_signal"]}
+
+
+def classify_point_end(serve_analysis, terminal_state, terminal_contact, point_links, shot_lookup, bounce_lookup):
+    reasons = []
+    review_flags = []
+    serve_state = serve_analysis.get("state")
+    if serve_state == "played_out_after_geometric_fault":
+        review_flags.append("serve_geometry_disagrees_with_play_continuation")
+    if serve_analysis.get("status") == "double_fault":
+        return {
+            "type": "double_fault",
+            "confidence": serve_analysis.get("confidence") or "medium",
+            "reasons": serve_analysis.get("reasons") or ["double_fault"],
+            "review_flags": review_flags,
+            "inferred_winner": serve_analysis.get("inferred_winner"),
+            "scoring_eligible": quality_at_least(serve_analysis.get("confidence"), "medium"),
+        }
+
+    if terminal_state.get("status") == "out":
+        if terminal_state.get("world_out"):
+            reasons.append("terminal_ball_world_out")
+        if terminal_state.get("frame_out_direction"):
+            reasons.append("terminal_ball_moving_out_of_frame")
+        if terminal_state.get("missing_after_last", 0) >= 2:
+            reasons.append("final_ball_missing_before_point_end")
+        if terminal_state.get("confidence") == "low":
+            review_flags.append("low_confidence_terminal_out")
+        if not terminal_state.get("world_out") and not terminal_state.get("frame_out_direction"):
+            review_flags.append("final_ball_out_of_frame")
+
+        contact_quality = terminal_contact.get("quality")
+        terminal_quality = terminal_state.get("confidence") or "low"
+        if not terminal_contact.get("player") or not quality_at_least(contact_quality, "medium"):
+            return {
+                "type": "unknown_end",
+                "confidence": "low",
+                "reasons": reasons + [terminal_contact.get("reason") or "missing_terminal_contact"],
+                "review_flags": review_flags + ["cannot_identify_final_hitter"],
+                "terminal_contact": terminal_contact,
+                "inferred_winner": None,
+                "scoring_eligible": False,
+            }
+
+        previous_links = [
+            link for link in point_links if int(link.get("shot_frame") or 0) < int(terminal_contact.get("frame") or 0)
+        ]
+        previous_link = previous_links[-1] if previous_links else None
+        previous_shot = shot_lookup.get(previous_link.get("shot_id")) if previous_link else None
+        previous_bounce = bounce_lookup.get(previous_link.get("bounce_id")) if previous_link else None
+        pressure = pressure_from_previous_shot(previous_shot, previous_bounce)
+        end_type = "forced_error_out" if pressure["forced"] else "unforced_error_out"
+        confidence = min_quality(terminal_quality, contact_quality)
+        if confidence == "high":
+            confidence = "medium"
+        return {
+            "type": end_type,
+            "confidence": confidence,
+            "reasons": reasons + pressure["reasons"],
+            "review_flags": review_flags,
+            "terminal_contact": terminal_contact,
+            "inferred_winner": side_opponent(terminal_contact["player"]),
+            "scoring_eligible": quality_at_least(confidence, "medium"),
+        }
+
+    last_world = terminal_state.get("last_world_point")
+    if last_world and abs(last_world[1] - COURT_NET_Y_FT) <= 5.0:
+        return {
+            "type": "net_error",
+            "confidence": "low",
+            "reasons": ["terminal_ball_near_net"],
+            "review_flags": review_flags + ["low_confidence_net_error"],
+            "terminal_contact": terminal_contact,
+            "inferred_winner": side_opponent(terminal_contact["player"]) if terminal_contact.get("player") else None,
+            "scoring_eligible": False,
+        }
+
+    return {
+        "type": "unknown_end",
+        "confidence": "low",
+        "reasons": [terminal_state.get("reason") or "unknown_point_end"],
+        "review_flags": review_flags + ["unknown_point_end"],
+        "terminal_contact": terminal_contact,
+        "inferred_winner": None,
+        "scoring_eligible": False,
     }
 
 
@@ -990,6 +1199,8 @@ def build_analysis(rows, args):
         previous_bounce_record = bounce
 
     mark_dead_ball_candidates(raw_bounces, links, shots, point_ranges)
+    shot_lookup = {shot["id"]: shot for shot in shots}
+    bounce_lookup = {bounce["id"]: bounce for bounce in raw_bounces}
 
     points = []
     player_order = [args.server_player, args.receiver_player]
@@ -1037,16 +1248,43 @@ def build_analysis(rows, args):
             official_double_fault=index in official_double_fault_points,
         )
         terminal_state = terminal_ball_state(rows, point_range, inv_homography)
+        last_bounce_frame = max([bounce["frame"] for bounce in point_bounces], default=point_range["start_frame"])
+        terminal_contact = infer_terminal_contact(
+            rows,
+            point_range,
+            terminal_state,
+            last_bounce_frame,
+            inv_homography,
+        )
+        point_end_analysis = classify_point_end(
+            serve_analysis,
+            terminal_state,
+            terminal_contact,
+            point_links,
+            shot_lookup,
+            bounce_lookup,
+        )
         point_end_reason = serve_analysis.get("point_end_reason")
-        if point_end_reason is None and terminal_state.get("status") == "out":
-            point_end_reason = "out"
+        if point_end_reason is None:
+            if point_end_analysis.get("type") in {"forced_error_out", "unforced_error_out"}:
+                point_end_reason = "out"
+            elif point_end_analysis.get("type") == "net_error":
+                point_end_reason = "net"
+            elif terminal_state.get("status") == "out":
+                point_end_reason = "out"
         manual_winner = winners[index - 1] if winners else None
-        if args.auto_score and serve_analysis.get("inferred_winner") is not None:
-            winner = serve_analysis["inferred_winner"]
+        auto_winner = None
+        if point_end_analysis.get("scoring_eligible"):
+            auto_winner = point_end_analysis.get("inferred_winner")
+        if args.auto_score and auto_winner is not None:
+            winner = auto_winner
             winner_source = "auto"
         else:
             winner = manual_winner
-            winner_source = "manual" if manual_winner else None
+            if manual_winner and args.auto_score and point_end_analysis.get("inferred_winner") is not None:
+                winner_source = "manual_low_confidence_auto_fallback"
+            else:
+                winner_source = "manual" if manual_winner else None
         winner_player = side_to_player.get(winner) if winner else None
         game_winner = None
         set_winner = None
@@ -1134,8 +1372,16 @@ def build_analysis(rows, args):
                 "winner_player": winner_player,
                 "winner_source": winner_source,
                 "point_end_reason": point_end_reason,
+                "point_end_type": point_end_analysis.get("type"),
+                "point_end_confidence": point_end_analysis.get("confidence"),
+                "point_end_reasons": point_end_analysis.get("reasons"),
+                "point_review_flags": point_end_analysis.get("review_flags"),
+                "point_end_analysis": point_end_analysis,
                 "terminal_ball": terminal_state,
                 "serve_status": serve_analysis.get("status"),
+                "serve_state": serve_analysis.get("state"),
+                "serve_confidence": serve_analysis.get("confidence"),
+                "serve_reasons": serve_analysis.get("reasons"),
                 "serve_analysis": serve_analysis,
                 "point_score_before": point_score_before,
                 "score_after": score_after,
@@ -1203,6 +1449,11 @@ def min_quality(*qualities):
     if not labels:
         return "unknown"
     return min(labels, key=lambda label: order.get(label, 1))
+
+
+def quality_at_least(quality, minimum):
+    order = {"missing": 0, "low": 1, "medium": 2, "high": 3}
+    return order.get(quality, 0) >= order.get(minimum, 0)
 
 
 def main():
