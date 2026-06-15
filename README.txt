@@ -9,15 +9,22 @@ Current status
   - ball tracking
   - near/far player labeling
   - other object boxes such as rackets and cars
+- The tennis9 post-analysis pipeline now adds:
+  - serve-state diagnostics
+  - point-ending diagnostics
+  - point/game/set scoring
+  - audit CSV/summary exports
+  - per-point debug court-map PNGs
+  - red-mark and clean overlay renders
 - The YOLO-only tracker is still experimental for:
   - bounce detection
   - far-side bounce detection
   - separating true bounces from player or racket contact points
-- Current real-world result on `yoloVids/tennis6.MOV`:
-  - about 5 bounces are detected total
-  - near-side bounces can be found
-  - far-side bounces are still effectively 0
-  - this is still far short of the expected 20+ bounce/contact events in the rally footage
+- Current known-good analysis target:
+  - manifest: `manifests/tennis9_analysis_manifest.json`
+  - analysis JSON: `yoloVids/outputs/tennis9/play_segments/ai9.5.analysis.json`
+  - red-mark render: `yoloVids/outputs/tennis9/play_segments/ai9.5.avi`
+  - clean render: `yoloVids/outputs/tennis9/play_segments/ai9.6.avi`
 
 Files
 - `track_ball.py`: original tracker with HSV/motion and optional YOLO support
@@ -83,6 +90,9 @@ Run the tracked tennis9 analysis, audit exports, and configured overlay renders:
 
 python run_tennis_pipeline.py --manifest manifests/tennis9_analysis_manifest.json
 
+This writes per-point debug PNGs to `yoloVids/outputs/tennis9/play_segments/point_debug/`.
+Magenta `B?` markers are conservative trajectory-based missed-bounce candidates for review; they are not counted as live scoring bounces.
+
 After regenerating tennis9 outputs, validate the known-good scoring and point-ending behavior:
 
 python validate_tennis9_regression.py
@@ -127,21 +137,24 @@ What was added to `track_ball_yolo.py`
    - runs a second higher-resolution YOLO pass over the top portion of the frame
    - added because the iPhone `0.8x` footage makes the far-court ball very small
 
-8. Experimental bounce markers
+8. Physical jump rejection
+   - rejects active ball candidates that move impossibly far in one frame
+   - rejects candidates that are too far from the predicted next ball position
+   - rejects huge near/far court side flips
+   - tries the next plausible candidate before dropping the ball
+
+9. Experimental bounce markers
    - current event work is bounce-only for now
    - hit markers were removed temporarily because they were too noisy
 
-9. Side-aware bounce filtering
+10. Side-aware bounce filtering
    - uses `court_calib.json` when available
    - tries to treat near-side and far-side bounce candidates differently
    - rejects candidates that project outside the singles court
 
-10. Mini singles-court overlay
+11. Mini singles-court overlay
    - draws a small singles court in the top-right corner
    - plots the current ball position and recent bounce markers when calibration is available
-   - current state is still not correct for `tennis6`
-   - mapping improved after replacing the stale calibration file, but the mini-map orientation is still flipped
-   - the near side is still appearing at the top of the mini-map, which is backwards for this camera view
 
 Important YOLO-only options
 Main detection options
@@ -155,6 +168,9 @@ Main detection options
 
 Tracking options
 - `--ball-max-distance`: max frame-to-frame match distance for ball IDs
+- `--ball-max-jump-px`: reject active ball candidates that move too far from the last accepted ball in one frame
+- `--ball-max-prediction-error-px`: reject active ball candidates that are too far from the predicted next ball position
+- `--ball-max-side-flip-jump-px`: reject impossible near/far court side flips
 - `--object-max-distance`: max frame-to-frame match distance for player/object IDs
 - `--trail`: ball trail length
 
@@ -204,29 +220,19 @@ YOLO-only tracker
 - Some player-contact points can still be mislabeled as bounces.
 - The script is not currently trying to show hit markers.
 - The mini court overlay depends on court calibration quality; bad calibration will place mapped points incorrectly.
-- Even with the new `tennis6` calibration, the mini-map orientation is still backwards:
-  - near side is shown on the top half
-  - far side is shown on the bottom half
-- Bounce mapping is still not trustworthy enough to use as a source of truth for side classification.
-- Current detector behavior on `tennis6` is roughly:
-  - around 5 detected bounces total
-  - 0 far-side bounces
-  - still much lower than the expected number of bounce/contact moments in the clip
+- The missed-bounce recovery layer is currently review-only. It surfaces magenta `B?` candidates but does not count them as live scoring bounces.
+- The physical jump gate affects future `track_ball_yolo.py` runs. Existing renders based on an old JSONL need the tracking log regenerated before they benefit from it.
 
-Latest calibration/debug notes
-- The old `court_calib.json` was invalid for `tennis6` because its coordinates were outside the `1280x720` frame.
-- That stale calibration was replaced with a `tennis6`-specific calibration fitted to the actual visible doubles court.
-- The projected court overlay from that replacement calibration looked visually plausible on the extracted frame.
-- Despite that, the runtime mini-map is still oriented incorrectly, so the world-to-mini-court convention is still wrong somewhere in `track_ball_yolo.py`.
-- Because the mini-map and side classification are coupled through projected court coordinates, far-side bounce logic should not be trusted until that orientation issue is fixed.
+Latest tennis9 analysis notes
+- Point 1 is flagged as `played_out_after_geometric_fault` because geometry says double fault but the players continued.
+- Points 3 and 4 are official double faults from the manifest override.
+- Scoring for tennis9 validates as `0-15`, `0-30`, `0-40`, then game score `0-1`.
+- `validate_tennis9_regression.py` checks the known-good serve states, point endings, scoring, audit columns, and point debug images.
 
 Immediate next step
-- Fix the mini-court/world-coordinate orientation in `track_ball_yolo.py` so:
-  - far court is the top half of the mini-map
-  - near court is the bottom half of the mini-map
-  - mapped bounce points land in the correct service box / lateral lane
-- After the map orientation is correct, retune far-side bounce detection.
-- Do not spend more time tuning bounce thresholds until the court-world mapping is verified correct during an actual `tennis6` render.
+- Rerun `track_ball_yolo.py` to regenerate the tennis9 JSONL with the physical jump gate enabled, then rerun the manifest pipeline.
+- Review any remaining visible ball jumps and compare them against `ball_debug.selector.rejected_candidates`.
+- Only promote missed-bounce candidates into live bounces after visual review proves they are true court bounces.
 
 Environment issues encountered
 - Ultralytics `track()` pulled in a missing `lap` dependency, so the YOLO-only script uses a custom simple tracker instead.
@@ -234,31 +240,38 @@ Environment issues encountered
 - Running directly in the user's local terminal worked.
 
 Recommended workflow
-1. Edit `track_ball_yolo.py`.
-2. Run on:
+1. Edit `track_ball_yolo.py` or the tennis analysis scripts.
+2. For tennis9 analysis-only changes, run:
+
+   python run_tennis_pipeline.py --manifest manifests/tennis9_analysis_manifest.json
+
+3. Validate tennis9:
+
+   python validate_tennis9_regression.py
+
+4. For tracker changes that affect the JSONL, rerun `track_ball_yolo.py` on the source clip first, then rerun the manifest pipeline.
+5. For older tennis6 tracker debugging, run:
 
    .venv/bin/python track_ball_yolo.py --video yoloVids/tennis6.MOV --output yoloVids/test_output.avi --court-calib-file=court_calib.json --headless
 
-3. Open the result:
+6. Open the result:
 
    open yoloVids/test_output.avi
 
-4. Evaluate:
+7. Evaluate:
    - ball quality
    - near/far player boxes
    - false bounce markers
    - missed near/far bounces
    - mini court overlay placement
-   - whether the mini-map is upside down
-   - whether near-side bounces map to the lower half
-   - whether far-side bounces map to the upper half
+   - impossible ball jumps
+   - whether jump rejections appear in `ball_debug.selector.rejected_candidates`
 
-5. Tune one problem at a time.
+8. Tune one problem at a time.
 
 Current takeaway
 - YOLO-only ball and player tracking is usable.
 - Far-ball tracking needed special handling because of the wide-angle phone footage.
-- Bounce marking is still experimental and should not be treated as correct yet.
+- Bounce marking and missed-bounce recovery are still experimental and should not be treated as scoring truth without review.
 - Hit detection is intentionally disabled for now while bounce quality is being improved.
-- The next concrete task is not generic bounce tuning.
-- The next concrete task is fixing the court-world / mini-map orientation bug and then revisiting far-side bounce detection.
+- The next concrete task is regenerating tennis9 tracking logs with the physical jump gate and reviewing any remaining jumps.

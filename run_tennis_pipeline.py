@@ -54,22 +54,24 @@ def main():
         csv_path = audit.get("csv")
         summary_json = audit.get("summary_json")
         court_map = audit.get("court_map")
+        point_debug_dir = audit.get("point_debug_dir")
         if not csv_path or not summary_json or not court_map:
             raise ValueError("audit config must define 'csv', 'summary_json', and 'court_map'")
-        run_command(
-            [
-                sys.executable,
-                "export_tennis_audit.py",
-                "--analysis",
-                analysis_path,
-                "--csv",
-                csv_path,
-                "--summary-json",
-                summary_json,
-                "--court-map",
-                court_map,
-            ]
-        )
+        command = [
+            sys.executable,
+            "export_tennis_audit.py",
+            "--analysis",
+            analysis_path,
+            "--csv",
+            csv_path,
+            "--summary-json",
+            summary_json,
+            "--court-map",
+            court_map,
+        ]
+        if point_debug_dir:
+            command.extend(["--point-debug-dir", point_debug_dir])
+        run_command(command)
 
     if args.skip_render:
         return

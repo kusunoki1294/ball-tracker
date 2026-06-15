@@ -23,6 +23,7 @@ def parse_args():
     parser.add_argument("--csv", required=True, help="Output CSV path for bounce/shot review rows.")
     parser.add_argument("--summary-json", required=True, help="Output compact summary JSON path.")
     parser.add_argument("--court-map", required=True, help="Output PNG court map path.")
+    parser.add_argument("--point-debug-dir", default="", help="Optional directory for per-point debug PNGs.")
     return parser.parse_args()
 
 
@@ -180,6 +181,7 @@ def export_summary(analysis, path):
         ],
         "games": analysis.get("games", []),
         "excluded_bounces": analysis.get("excluded_bounces", []),
+        "missed_bounce_candidates": analysis.get("missed_bounce_candidates", []),
         "dead_ball_candidates": [
             bounce for bounce in analysis.get("bounces", []) if bounce.get("dead_ball_candidate")
         ],
@@ -192,6 +194,15 @@ def export_summary(analysis, path):
 def world_to_image(point, margin=70, scale=10):
     xw, yw = point
     return (int(round(margin + xw * scale)), int(round(margin + yw * scale)))
+
+
+def clamp_image_point(point, width, height, margin=18):
+    x, y = point
+    return (max(margin, min(width - margin, x)), max(margin, min(height - margin, y)))
+
+
+def point_debug_path(directory, point_index):
+    return os.path.join(directory, f"point_{int(point_index):02d}.png")
 
 
 def draw_line(image, p1, p2, color, thickness=2):
@@ -257,12 +268,29 @@ def export_court_map(analysis, path):
             1,
             cv2.LINE_AA,
         )
+    for candidate in analysis.get("missed_bounce_candidates", []):
+        world = candidate.get("world_point")
+        if not world:
+            continue
+        x, y = world_to_image(world)
+        cv2.drawMarker(image, (x, y), (255, 0, 255), cv2.MARKER_DIAMOND, 16, 2, cv2.LINE_AA)
+        cv2.putText(
+            image,
+            candidate.get("id", "").replace("missed_bounce_candidate_", "?"),
+            (x + 8, y + 14),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.42,
+            (245, 210, 245),
+            1,
+            cv2.LINE_AA,
+        )
     legend = [
         ("live rally", (255, 80, 80)),
         ("serve in", (0, 210, 0)),
         ("serve fault", (0, 120, 255)),
         ("dead candidate", (0, 220, 255)),
         ("excluded", (120, 120, 120)),
+        ("missed candidate", (255, 0, 255)),
     ]
     legend_x = int(COURT_WIDTH_FT * scale + margin + 28)
     for idx, (label, color) in enumerate(legend):
@@ -272,15 +300,137 @@ def export_court_map(analysis, path):
     cv2.imwrite(path, image)
 
 
+def put_text_lines(image, lines, origin, scale=0.48, color=(240, 245, 245), line_height=22):
+    x, y = origin
+    for line in lines:
+        cv2.putText(image, str(line), (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 1, cv2.LINE_AA)
+        y += line_height
+
+
+def export_point_debug_images(analysis, directory):
+    os.makedirs(directory, exist_ok=True)
+    margin = 70
+    scale = 10
+    panel_width = 420
+    width = int(COURT_WIDTH_FT * scale + margin * 2 + panel_width)
+    height = int(COURT_LENGTH_FT * scale + margin * 2)
+    bounces_by_point = {}
+    for bounce in analysis.get("bounces", []):
+        bounces_by_point.setdefault(bounce.get("point_index"), []).append(bounce)
+    missed_by_point = {}
+    for candidate in analysis.get("missed_bounce_candidates", []):
+        missed_by_point.setdefault(candidate.get("point_index"), []).append(candidate)
+    serve_attempts = {}
+    for point in analysis.get("points", []):
+        for attempt in (point.get("serve_analysis") or {}).get("attempts") or []:
+            serve_attempts[attempt.get("bounce_id")] = attempt
+
+    for point in analysis.get("points", []):
+        image = np.zeros((height, width, 3), dtype=np.uint8)
+        image[:] = (26, 38, 34)
+        draw_court(image)
+        for bounce in bounces_by_point.get(point.get("index"), []):
+            world = bounce.get("world_point")
+            if not world:
+                continue
+            x, y = world_to_image(world, margin=margin, scale=scale)
+            color = bounce_color(bounce, serve_attempts)
+            radius = 8 if bounce.get("live") else 5
+            cv2.circle(image, (x, y), radius, color, -1, cv2.LINE_AA)
+            cv2.putText(
+                image,
+                bounce.get("id", "").replace("bounce_", ""),
+                (x + 10, y - 7),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                (245, 245, 245),
+                1,
+                cv2.LINE_AA,
+            )
+        for candidate in missed_by_point.get(point.get("index"), []):
+            world = candidate.get("world_point")
+            if not world:
+                continue
+            x, y = world_to_image(world, margin=margin, scale=scale)
+            cv2.drawMarker(image, (x, y), (255, 0, 255), cv2.MARKER_DIAMOND, 18, 2, cv2.LINE_AA)
+            cv2.putText(image, "B?", (x + 10, y + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 150, 255), 1, cv2.LINE_AA)
+
+        point_end = point.get("point_end_analysis") or {}
+        terminal_ball = point.get("terminal_ball") or {}
+        terminal_world = terminal_ball.get("last_world_point")
+        if terminal_world:
+            raw_x, raw_y = world_to_image(terminal_world, margin=margin, scale=scale)
+            x, y = clamp_image_point((raw_x, raw_y), int(COURT_WIDTH_FT * scale + margin * 2), height)
+            cv2.drawMarker(image, (x, y), (0, 255, 255), cv2.MARKER_TILTED_CROSS, 22, 2, cv2.LINE_AA)
+            cv2.putText(image, "terminal", (x + 12, y + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
+
+        terminal_contact = point_end.get("terminal_contact") or {}
+        contact_world = terminal_contact.get("world_point")
+        if contact_world:
+            raw_x, raw_y = world_to_image(contact_world, margin=margin, scale=scale)
+            x, y = clamp_image_point((raw_x, raw_y), int(COURT_WIDTH_FT * scale + margin * 2), height)
+            cv2.drawMarker(image, (x, y), (255, 210, 60), cv2.MARKER_STAR, 24, 2, cv2.LINE_AA)
+            cv2.putText(image, "contact", (x + 12, y - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 210, 60), 1, cv2.LINE_AA)
+
+        panel_x = int(COURT_WIDTH_FT * scale + margin + 25)
+        cv2.rectangle(image, (panel_x - 15, margin - 30), (width - 25, height - margin + 30), (34, 48, 45), -1)
+        cv2.rectangle(image, (panel_x - 15, margin - 30), (width - 25, height - margin + 30), (95, 115, 110), 1)
+        lines = [
+            f"Point {point.get('index')}",
+            f"frames: {point.get('start_frame')}-{point.get('end_frame')}",
+            f"score before: {point.get('point_score_before')}",
+            f"score after: {point.get('score_after')}",
+            f"winner: {point.get('winner')} ({point.get('winner_source')})",
+            "",
+            f"serve: {point.get('serve_state')} [{point.get('serve_confidence')}]",
+            f"end: {point.get('point_end_type')} [{point.get('point_end_confidence')}]",
+            f"reason: {point.get('point_end_reason')}",
+            f"terminal: {terminal_ball.get('status')} [{terminal_ball.get('confidence')}]",
+            f"terminal frame: {terminal_ball.get('last_ball_frame')}",
+            f"contact: {terminal_contact.get('player')} [{terminal_contact.get('quality')}]",
+            f"contact frame: {terminal_contact.get('frame')}",
+            f"contact margin: {terminal_contact.get('score_margin')}",
+            "",
+            "review flags:",
+        ]
+        flags = point.get("point_review_flags") or []
+        if flags:
+            lines.extend([f"- {flag}" for flag in flags])
+        else:
+            lines.append("- none")
+        lines.append("")
+        lines.append("end reasons:")
+        reasons = point.get("point_end_reasons") or []
+        lines.extend([f"- {reason}" for reason in reasons] if reasons else ["- none"])
+        point_candidates = missed_by_point.get(point.get("index"), [])
+        lines.append("")
+        lines.append("missed bounce candidates:")
+        if point_candidates:
+            lines.extend(
+                [
+                    f"- f{candidate.get('frame')} {candidate.get('side')} {candidate.get('confidence')} s={candidate.get('strength')}"
+                    for candidate in point_candidates
+                ]
+            )
+        else:
+            lines.append("- none")
+        put_text_lines(image, lines, (panel_x, margin), scale=0.48)
+        cv2.imwrite(point_debug_path(directory, point.get("index")), image)
+
+
 def main():
     args = parse_args()
     analysis = load_json(args.analysis)
     export_csv(analysis, args.csv)
     export_summary(analysis, args.summary_json)
     export_court_map(analysis, args.court_map)
+    if args.point_debug_dir:
+        export_point_debug_images(analysis, args.point_debug_dir)
     print(f"wrote {args.csv}")
     print(f"wrote {args.summary_json}")
     print(f"wrote {args.court_map}")
+    if args.point_debug_dir:
+        print(f"wrote point debug images to {args.point_debug_dir}")
 
 
 if __name__ == "__main__":

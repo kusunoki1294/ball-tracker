@@ -114,6 +114,17 @@ def parse_args():
         default="0-0",
         help="Starting sets, in server-receiver order.",
     )
+    parser.add_argument(
+        "--recover-missed-bounce-candidates",
+        action="store_true",
+        help="Export conservative trajectory-based candidates for likely missed bounces.",
+    )
+    parser.add_argument(
+        "--missed-bounce-min-strength",
+        type=float,
+        default=32.0,
+        help="Minimum local trajectory extremum strength for a missed-bounce candidate.",
+    )
     args = parser.parse_args()
     if args.manifest:
         args = apply_manifest(args, args.manifest)
@@ -147,6 +158,8 @@ def apply_manifest(args, manifest_path):
         "exclude_bounce_frames": "exclude_bounce_frames",
         "initial_game_score": "initial_game_score",
         "initial_set_score": "initial_set_score",
+        "recover_missed_bounce_candidates": "recover_missed_bounce_candidates",
+        "missed_bounce_min_strength": "missed_bounce_min_strength",
     }
     defaults = {
         "jsonl": "",
@@ -168,6 +181,8 @@ def apply_manifest(args, manifest_path):
         "exclude_bounce_frames": "",
         "initial_game_score": "0-0",
         "initial_set_score": "0-0",
+        "recover_missed_bounce_candidates": False,
+        "missed_bounce_min_strength": 32.0,
     }
     for manifest_key, attr in field_map.items():
         if manifest_key not in manifest:
@@ -861,7 +876,7 @@ def infer_terminal_contact(rows, point_range, terminal_state, after_frame, inv_h
     terminal_frame = terminal_state.get("last_ball_frame") or point_range["end_frame"]
     search_start = max(point_range["start_frame"], (after_frame or point_range["start_frame"]) + 1, terminal_frame - 120)
     search_end = min(point_range["end_frame"], terminal_frame)
-    best = None
+    candidates = []
     for row in rows:
         frame = int(row["frame"])
         if frame < search_start or frame > search_end:
@@ -897,24 +912,54 @@ def infer_terminal_contact(rows, point_range, terminal_state, after_frame, inv_h
                 "point": [round(float(point[0]), 1), round(float(point[1]), 1)],
                 "world_point": [round(world_point[0], 2), round(world_point[1], 2)] if world_point else None,
                 "quality": quality,
-                "score": round(score, 2),
+                "score": score,
                 "player_distance_px": round(player_distance, 1),
                 "racket_distance_px": round(racket_distance_px, 1) if racket_distance_px is not None else None,
             }
-            if best is None or score < best["score"]:
-                best = candidate
-    if best is None:
+            candidates.append(candidate)
+    if not candidates:
         return {
             "player": None,
             "quality": "missing",
             "reason": "no_terminal_contact_candidate",
             "search_range": [search_start, search_end],
         }
+
+    candidates.sort(key=lambda candidate: candidate["score"])
+    best = candidates[0]
+    second = next(
+        (candidate for candidate in candidates[1:] if candidate["player"] != best["player"]),
+        candidates[1] if len(candidates) > 1 else None,
+    )
+    score_margin = None
+    if second:
+        score_margin = round(second["score"] - best["score"], 2)
+    best["score"] = round(best["score"], 2)
+    best["score_margin"] = score_margin
+    best["competing_player"] = second.get("player") if second else None
+    best["competing_score"] = round(second["score"], 2) if second else None
+    if score_margin is not None and score_margin < 12.0 and best["quality"] == "high":
+        best["quality"] = "medium"
+    elif score_margin is not None and score_margin < 6.0 and best["quality"] == "medium":
+        best["quality"] = "low"
     if best["quality"] == "low":
         best["reason"] = "weak_terminal_contact_candidate"
+    elif score_margin is not None and score_margin < 12.0:
+        best["reason"] = "ambiguous_terminal_contact_candidate"
     else:
         best["reason"] = "terminal_contact_candidate"
     best["search_range"] = [search_start, search_end]
+    best["candidates"] = [
+        {
+            "frame": candidate["frame"],
+            "player": candidate["player"],
+            "quality": candidate["quality"],
+            "score": round(candidate["score"], 2),
+            "player_distance_px": candidate["player_distance_px"],
+            "racket_distance_px": candidate["racket_distance_px"],
+        }
+        for candidate in candidates[:6]
+    ]
     return best
 
 
@@ -962,6 +1007,10 @@ def classify_point_end(serve_analysis, terminal_state, terminal_contact, point_l
             review_flags.append("low_confidence_terminal_out")
         if not terminal_state.get("world_out") and not terminal_state.get("frame_out_direction"):
             review_flags.append("final_ball_out_of_frame")
+        if terminal_contact.get("reason") == "ambiguous_terminal_contact_candidate":
+            review_flags.append("ambiguous_terminal_contact")
+        if terminal_contact.get("score_margin") is not None and terminal_contact.get("score_margin") < 6.0:
+            review_flags.append("low_terminal_contact_margin")
 
         contact_quality = terminal_contact.get("quality")
         terminal_quality = terminal_state.get("confidence") or "low"
@@ -1077,6 +1126,109 @@ def mark_dead_ball_candidates(raw_bounces, links, shots, point_ranges):
         bounce["review_reasons"] = sorted(set(review_reasons))
 
 
+def local_extremum_strength(previous_points, point, next_points):
+    if len(previous_points) < 2 or len(next_points) < 2:
+        return None
+    prev_y = sum(item[1] for item in previous_points) / len(previous_points)
+    next_y = sum(item[1] for item in next_points) / len(next_points)
+    y = point[1]
+    bottom_strength = min(y - prev_y, y - next_y)
+    top_strength = min(prev_y - y, next_y - y)
+    if bottom_strength >= top_strength:
+        return {"strength": bottom_strength, "shape": "local_bottom"}
+    return {"strength": top_strength, "shape": "local_top"}
+
+
+def find_missed_bounce_candidates(
+    rows,
+    point_ranges,
+    raw_bounces,
+    excluded_bounce_frame_ranges,
+    official_double_fault_points,
+    inv_homography,
+    min_strength,
+):
+    if not point_ranges:
+        return []
+    rows_with_ball = [row for row in rows if row.get("ball") and row["ball"].get("center")]
+    bounces_by_point = {}
+    for bounce in raw_bounces:
+        bounces_by_point.setdefault(bounce.get("point_index"), []).append(bounce)
+
+    candidates = []
+    occupied_frames = [bounce["frame"] for bounce in raw_bounces]
+    for point_index, point_range in enumerate(point_ranges, start=1):
+        if point_index in official_double_fault_points:
+            continue
+        point_rows = [row for row in rows_with_ball if point_range["start_frame"] <= row["frame"] <= point_range["end_frame"]]
+        if len(point_rows) < 12:
+            continue
+        point_bounces = sorted(bounces_by_point.get(point_index) or [], key=lambda item: item["frame"])
+        if not point_bounces:
+            continue
+        gap_frames = [point_range["start_frame"]]
+        gap_frames.extend(bounce["frame"] for bounce in point_bounces)
+        gap_frames.append(point_range["end_frame"])
+        for gap_start, gap_end in zip(gap_frames, gap_frames[1:]):
+            if gap_end - gap_start < 95:
+                continue
+            if gap_start == point_range["start_frame"]:
+                continue
+            segment = [row for row in point_rows if gap_start + 18 <= row["frame"] <= gap_end - 18]
+            best = None
+            for index in range(3, len(segment) - 3):
+                row = segment[index]
+                frame = int(row["frame"])
+                if frame_in_ranges(frame, excluded_bounce_frame_ranges):
+                    continue
+                if any(abs(frame - occupied) < 30 for occupied in occupied_frames):
+                    continue
+                point = row["ball"].get("center")
+                if not point:
+                    continue
+                previous_points = [item["ball"]["center"] for item in segment[index - 3 : index] if item.get("ball")]
+                next_points = [item["ball"]["center"] for item in segment[index + 1 : index + 4] if item.get("ball")]
+                extremum = local_extremum_strength(previous_points, point, next_points)
+                if not extremum or extremum["strength"] < min_strength:
+                    continue
+                world_point = project_to_court_world(point, inv_homography)
+                if not world_point_in_bounds(world_point, margin=1.5):
+                    continue
+                side = side_for_world(world_point)
+                player = get_player(row, side) if side else None
+                zone = expanded_strike_zone(player, side) if side else None
+                player_distance = point_to_bbox_distance(point, zone) if zone else None
+                racket = nearest_racket(row, point)
+                racket_distance_px = racket["distance"] if racket else None
+                if player_distance is not None and player_distance <= 35.0:
+                    continue
+                score = extremum["strength"]
+                if player_distance is not None:
+                    score -= max(0.0, 35.0 - player_distance) * 0.25
+                candidate = {
+                    "id": f"missed_bounce_candidate_{len(candidates) + 1:03d}",
+                    "frame": frame,
+                    "point_index": point_index,
+                    "point": [int(round(point[0])), int(round(point[1]))],
+                    "world_point": [round(world_point[0], 2), round(world_point[1], 2)] if world_point else None,
+                    "side": side,
+                    "shape": extremum["shape"],
+                    "strength": round(extremum["strength"], 1),
+                    "score": round(score, 1),
+                    "confidence": "medium" if score >= min_strength + 24.0 else "low",
+                    "reason": "trajectory_extremum_between_native_bounces",
+                    "gap": [gap_start, gap_end],
+                    "player_distance_px": round(player_distance, 1) if player_distance is not None else None,
+                    "racket_distance_px": round(racket_distance_px, 1) if racket_distance_px is not None else None,
+                }
+                if best is None or candidate["score"] > best["score"]:
+                    best = candidate
+            if best:
+                candidates.append(best)
+                occupied_frames.append(best["frame"])
+    return candidates
+
+
 def build_analysis(rows, args):
     court_calib = load_court_calibration(args.court_calib_file)
     inv_homography = build_inverse_court_homography(court_calib)
@@ -1127,6 +1279,18 @@ def build_analysis(rows, args):
         elif point_index in official_double_fault_points and per_point_bounce_counts[point_index] > 2:
             bounce["live"] = False
             bounce["exclude_reason"] = "post_double_fault_dead_ball"
+
+    missed_bounce_candidates = []
+    if args.recover_missed_bounce_candidates:
+        missed_bounce_candidates = find_missed_bounce_candidates(
+            rows,
+            point_ranges,
+            raw_bounces,
+            excluded_bounce_frame_ranges,
+            official_double_fault_points,
+            inv_homography,
+            args.missed_bounce_min_strength,
+        )
 
     live_bounces = [bounce for bounce in raw_bounces if bounce.get("live")]
     previous_bounce_frame = None
@@ -1432,12 +1596,14 @@ def build_analysis(rows, args):
             "final_game_score": format_ordered_score(game_score, player_order),
             "final_set_score": format_ordered_score(set_score, player_order),
             "completed_games": len(games),
+            "missed_bounce_candidates": len(missed_bounce_candidates),
         },
         "points": points,
         "games": games,
         "bounces": raw_bounces,
         "live_bounce_ids": [bounce["id"] for bounce in live_bounces],
         "excluded_bounces": [bounce for bounce in raw_bounces if not bounce.get("live")],
+        "missed_bounce_candidates": missed_bounce_candidates,
         "shots": shots,
         "shot_bounce_links": links,
     }

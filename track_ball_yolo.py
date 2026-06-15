@@ -406,6 +406,9 @@ class BallSelector:
         seed_match_distance=90.0,
         pending_miss_tolerance=1,
         coast_frames=2,
+        max_jump_px=280.0,
+        max_prediction_error_px=240.0,
+        max_side_flip_jump_px=380.0,
         ai_assist=None,
     ):
         self.last_ball = None
@@ -420,6 +423,9 @@ class BallSelector:
         self.pending_seen_frames = 0
         self.pending_missed_frames = 0
         self.pending_history = deque(maxlen=max(2, self.seed_confirm_frames + self.pending_miss_tolerance + 1))
+        self.max_jump_px = max(1.0, float(max_jump_px))
+        self.max_prediction_error_px = max(1.0, float(max_prediction_error_px))
+        self.max_side_flip_jump_px = max(1.0, float(max_side_flip_jump_px))
         self.ai_assist = ai_assist
         self.last_debug = {}
 
@@ -517,25 +523,44 @@ class BallSelector:
             if ai_ranked:
                 ranked = ai_ranked
                 ai_used = True
-        chosen, chosen_score = ranked[0]
+        chosen = None
+        chosen_score = None
+        rejected_candidates = []
+        for candidate, candidate_score in ranked:
+            rejection = self._physical_jump_rejection(candidate, predicted)
+            if rejection is None:
+                chosen = candidate
+                chosen_score = candidate_score
+                break
+            rejected_candidates.append(
+                {
+                    "candidate": self._candidate_entry(candidate, candidate_score),
+                    "rejection": rejection,
+                }
+            )
+        if chosen is None:
+            self.missed_frames += 1
+            self.last_debug.update(
+                {
+                    "predicted_center": [int(round(predicted[0])), int(round(predicted[1]))],
+                    "top_candidates": self._candidate_debug(ranked),
+                    "rejected_candidates": rejected_candidates[:3],
+                    "decision": "no_ball",
+                    "reason": "physical_jump_rejected",
+                    "missed_frames_after": self.missed_frames,
+                    "ai_assist": self.ai_assist.last_debug if self.ai_assist is not None else None,
+                }
+            )
+            return None
         self.last_debug.update(
             {
                 "predicted_center": [int(round(predicted[0])), int(round(predicted[1]))],
                 "top_candidates": self._candidate_debug(ranked),
                 "selected_candidate": self._candidate_entry(chosen, chosen_score),
+                "rejected_candidates": rejected_candidates[:3],
                 "ai_assist": self.ai_assist.last_debug if self.ai_assist is not None else None,
             }
         )
-        if self._reject_far_jump(chosen, predicted):
-            self.missed_frames += 1
-            self.last_debug.update(
-                {
-                    "decision": "no_ball",
-                    "reason": "far_jump_rejected",
-                    "missed_frames_after": self.missed_frames,
-                }
-            )
-            return None
         previous_last = self.last_ball
         previous_prev = self.prev_ball
         self._clear_pending()
@@ -631,17 +656,62 @@ class BallSelector:
 
         return score
 
-    def _reject_far_jump(self, det, predicted):
+    def _physical_jump_rejection(self, det, predicted):
+        if self.last_ball is None:
+            return None
         center = tuple(det["center"])
         conf = det.get("conf") or 0.0
-        if predicted[1] >= 420 or center[1] >= 420:
-            return False
-        distance = math.hypot(center[0] - predicted[0], center[1] - predicted[1])
-        if conf < 0.25 and distance > 46.0:
-            return True
-        if conf < 0.35 and distance > 62.0:
-            return True
-        return False
+        last_center = tuple(self.last_ball["center"])
+        last_distance = math.hypot(center[0] - last_center[0], center[1] - last_center[1])
+        prediction_error = math.hypot(center[0] - predicted[0], center[1] - predicted[1])
+        missing_allowance = max(0, self.missed_frames)
+        max_jump = self.max_jump_px + (missing_allowance * 95.0)
+        max_prediction_error = self.max_prediction_error_px + (missing_allowance * 105.0)
+        max_side_flip_jump = self.max_side_flip_jump_px + (missing_allowance * 85.0)
+        last_side = "far" if last_center[1] < 420 else "near"
+        center_side = "far" if center[1] < 420 else "near"
+        side_flip = last_side != center_side
+
+        if last_distance > max_jump:
+            return {
+                "reason": "max_frame_jump",
+                "last_distance_px": round(last_distance, 1),
+                "limit_px": round(max_jump, 1),
+                "missing_frames": missing_allowance,
+            }
+        if prediction_error > max_prediction_error:
+            return {
+                "reason": "prediction_error",
+                "prediction_error_px": round(prediction_error, 1),
+                "limit_px": round(max_prediction_error, 1),
+                "missing_frames": missing_allowance,
+            }
+        if side_flip and last_distance > max_side_flip_jump:
+            return {
+                "reason": "side_flip_jump",
+                "last_distance_px": round(last_distance, 1),
+                "limit_px": round(max_side_flip_jump, 1),
+                "from_side": last_side,
+                "to_side": center_side,
+                "missing_frames": missing_allowance,
+            }
+        if last_center[1] < 420 and center[1] < 420:
+            distance = prediction_error
+            if conf < 0.25 and distance > 46.0:
+                return {
+                    "reason": "low_conf_far_prediction_error",
+                    "prediction_error_px": round(distance, 1),
+                    "limit_px": 46.0,
+                    "conf": round(conf, 3),
+                }
+            if conf < 0.35 and distance > 62.0:
+                return {
+                    "reason": "medium_conf_far_prediction_error",
+                    "prediction_error_px": round(distance, 1),
+                    "limit_px": 62.0,
+                    "conf": round(conf, 3),
+                }
+        return None
 
     def _clear_pending(self):
         self.pending_ball = None
@@ -1840,6 +1910,24 @@ def parse_args():
         help="Predicted frames to draw/log after a confirmed ball track temporarily loses detections.",
     )
     parser.add_argument(
+        "--ball-max-jump-px",
+        type=float,
+        default=280.0,
+        help="Reject active ball candidates farther than this many pixels from the last accepted ball in one frame.",
+    )
+    parser.add_argument(
+        "--ball-max-prediction-error-px",
+        type=float,
+        default=240.0,
+        help="Reject active ball candidates farther than this many pixels from the predicted next position.",
+    )
+    parser.add_argument(
+        "--ball-max-side-flip-jump-px",
+        type=float,
+        default=380.0,
+        help="Reject near/far side flips that move farther than this many pixels in one frame.",
+    )
+    parser.add_argument(
         "--filter-contact-ball-candidates",
         action="store_true",
         help="Drop ball candidates inside near-player/racket contact zones before tracking.",
@@ -2346,6 +2434,9 @@ def main():
         seed_match_distance=max(1.0, args.ball_seed_match_distance),
         pending_miss_tolerance=max(0, args.ball_seed_miss_tolerance),
         coast_frames=max(0, args.ball_coast_frames),
+        max_jump_px=max(1.0, args.ball_max_jump_px),
+        max_prediction_error_px=max(1.0, args.ball_max_prediction_error_px),
+        max_side_flip_jump_px=max(1.0, args.ball_max_side_flip_jump_px),
         ai_assist=ball_ai_assist,
     )
     event_detector = EventDetector(

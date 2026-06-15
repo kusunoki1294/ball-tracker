@@ -113,6 +113,12 @@ def main():
         if shot.get("id") in shot_ids_by_fault_bounce:
             continue
         shots_by_frame.setdefault(int(shot["frame"]), []).append(shot)
+    missed_bounce_candidates_by_frame = {}
+    for candidate in analysis.get("missed_bounce_candidates", []):
+        point = candidate.get("point")
+        if not point:
+            continue
+        missed_bounce_candidates_by_frame.setdefault(int(candidate["frame"]), []).append(candidate)
     serve_labels_by_frame = {}
     for point in analysis.get("points", []):
         serve_analysis = point.get("serve_analysis") or {}
@@ -175,6 +181,17 @@ def main():
                         "label": shot_label(shot),
                     }
                 )
+        for candidate in missed_bounce_candidates_by_frame.get(frame_index, []):
+            point = candidate.get("point")
+            if point:
+                active_labels.append(
+                    {
+                        "expires": frame_index + args.shot_label_frames,
+                        "point": (int(round(point[0])), int(round(point[1]))),
+                        "label": f"B? {candidate.get('confidence', 'low')}",
+                        "color": (255, 0, 255),
+                    }
+                )
         for item in serve_labels_by_frame.get(frame_index, []):
             active_serve_labels.append({"expires": frame_index + 70, "label": item["label"]})
 
@@ -222,7 +239,7 @@ def main():
             y = max(32, min(height - 24, y - 24))
             label_width = max(180, min(460, len(item["label"]) * 14))
             x = max(16, min(width - label_width, x + 12))
-            draw_text(frame, item["label"], (x, y), scale=0.56, color=SHOT_COLOR, thickness=2)
+            draw_text(frame, item["label"], (x, y), scale=0.56, color=item.get("color", SHOT_COLOR), thickness=2)
 
         writer.write(frame)
 

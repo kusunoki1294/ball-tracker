@@ -44,10 +44,13 @@
   ],
   "initial_game_score": "0-0",
   "initial_set_score": "0-0",
+  "recover_missed_bounce_candidates": true,
+  "missed_bounce_min_strength": 32.0,
   "audit": {
     "csv": "yoloVids/outputs/tennis9/play_segments/ai9.5.audit.csv",
     "summary_json": "yoloVids/outputs/tennis9/play_segments/ai9.5.audit.summary.json",
-    "court_map": "yoloVids/outputs/tennis9/play_segments/ai9.5.court_map.png"
+    "court_map": "yoloVids/outputs/tennis9/play_segments/ai9.5.court_map.png",
+    "point_debug_dir": "yoloVids/outputs/tennis9/play_segments/point_debug"
   },
   "renders": [
     {

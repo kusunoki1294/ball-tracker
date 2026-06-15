@@ -1,6 +1,7 @@
 import argparse
 import csv
 import json
+import os
 import sys
 
 
@@ -77,6 +78,8 @@ REQUIRED_AUDIT_COLUMNS = {
     "point_review_flags",
 }
 
+EXPECTED_MISSED_BOUNCE_CANDIDATES = []
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Validate known-good tennis9 analysis outputs.")
@@ -89,6 +92,11 @@ def parse_args():
         "--audit-csv",
         default="yoloVids/outputs/tennis9/play_segments/ai9.5.audit.csv",
         help="Audit CSV produced by export_tennis_audit.py.",
+    )
+    parser.add_argument(
+        "--point-debug-dir",
+        default="yoloVids/outputs/tennis9/play_segments/point_debug",
+        help="Directory of per-point debug PNGs produced by export_tennis_audit.py.",
     )
     return parser.parse_args()
 
@@ -129,6 +137,11 @@ def validate_points(analysis):
     check_equal(errors, "summary final_point_score", summary.get("final_point_score"), "0-0")
     check_equal(errors, "summary final_game_score", summary.get("final_game_score"), "0-1")
     check_equal(errors, "summary final_set_score", summary.get("final_set_score"), "0-0")
+    candidates = analysis.get("missed_bounce_candidates") or []
+    check_equal(errors, "missed bounce candidate count", len(candidates), len(EXPECTED_MISSED_BOUNCE_CANDIDATES))
+    for expected, actual in zip(EXPECTED_MISSED_BOUNCE_CANDIDATES, candidates):
+        for key, value in expected.items():
+            check_equal(errors, f"missed bounce candidate {expected['frame']} {key}", actual.get(key), value)
     return errors
 
 
@@ -142,12 +155,24 @@ def validate_audit_csv(path):
     return []
 
 
+def validate_point_debug_images(directory):
+    errors = []
+    for point in EXPECTED_POINTS:
+        path = os.path.join(directory, f"point_{point['index']:02d}.png")
+        if not os.path.exists(path):
+            errors.append(f"missing point debug image: {path}")
+        elif os.path.getsize(path) <= 0:
+            errors.append(f"empty point debug image: {path}")
+    return errors
+
+
 def main():
     args = parse_args()
     errors = []
     analysis = load_json(args.analysis)
     errors.extend(validate_points(analysis))
     errors.extend(validate_audit_csv(args.audit_csv))
+    errors.extend(validate_point_debug_images(args.point_debug_dir))
     if errors:
         print("tennis9 regression validation failed:", file=sys.stderr)
         for error in errors:
