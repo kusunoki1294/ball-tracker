@@ -100,6 +100,11 @@ def parse_args():
         help="Comma-separated point indexes that should be treated as official double faults.",
     )
     parser.add_argument(
+        "--official-first-serve-in-points",
+        default="",
+        help="Comma-separated point indexes whose first serve should be treated as officially in.",
+    )
+    parser.add_argument(
         "--exclude-bounce-frames",
         default="",
         help="Comma-separated bounce frames/ranges to exclude from live point analysis, e.g. 1243,1303-1401.",
@@ -155,6 +160,7 @@ def apply_manifest(args, manifest_path):
         "auto_score": "auto_score",
         "ignore_bounces_before_frame": "ignore_bounces_before_frame",
         "official_double_fault_points": "official_double_fault_points",
+        "official_first_serve_in_points": "official_first_serve_in_points",
         "exclude_bounce_frames": "exclude_bounce_frames",
         "initial_game_score": "initial_game_score",
         "initial_set_score": "initial_set_score",
@@ -178,6 +184,7 @@ def apply_manifest(args, manifest_path):
         "auto_score": False,
         "ignore_bounces_before_frame": 0,
         "official_double_fault_points": "",
+        "official_first_serve_in_points": "",
         "exclude_bounce_frames": "",
         "initial_game_score": "0-0",
         "initial_set_score": "0-0",
@@ -696,7 +703,25 @@ def serve_state_result(
     return result
 
 
-def infer_serve_sequence(point_bounces, server, receiver, official_double_fault=False):
+def infer_serve_sequence(point_bounces, server, receiver, official_double_fault=False, official_first_serve_in=False):
+    if official_first_serve_in:
+        skipped = []
+        for bounce in point_bounces[:4]:
+            attempt = classify_serve_attempt(bounce, server, receiver, 1)
+            if attempt["result"] == "in":
+                return serve_state_result(
+                    "serve_in",
+                    None,
+                    None,
+                    [attempt],
+                    "first_serve_in",
+                    "high",
+                    ["official_first_serve_in_override"],
+                    official_override=True,
+                    skipped_pre_serve_bounce_ids=skipped,
+                )
+            skipped.append(bounce["id"])
+
     attempts = []
     for bounce in point_bounces[:2]:
         attempt = classify_serve_attempt(bounce, server, receiver, len(attempts) + 1)
@@ -1069,10 +1094,14 @@ def classify_point_end(serve_analysis, terminal_state, terminal_contact, point_l
     }
 
 
-def shot_type_for_link(point_shot_index, player, server, receiver):
-    if point_shot_index == 1:
-        return "serve" if player == server else "opening_shot"
+def shot_type_for_link(point_shot_index, player, server, receiver, serve_attempt=None):
+    if serve_attempt == 1:
+        return "first_serve"
+    if serve_attempt == 2:
+        return "second_serve"
     if point_shot_index == 2 and player == receiver:
+        return "return"
+    if point_shot_index == 3 and player == receiver:
         return "return"
     return "groundstroke"
 
@@ -1112,7 +1141,7 @@ def mark_dead_ball_candidates(raw_bounces, links, shots, point_ranges):
         if live_index == 1 and link:
             shot_type = link.get("shot_type")
             shot_player = link.get("player")
-            if shot_type != "serve" and shot_player != "near" and bounce.get("side") == "near":
+            if shot_type not in {"serve", "first_serve", "second_serve"} and shot_player != "near" and bounce.get("side") == "near":
                 reasons.append("nonserve_first_bounce_near_side")
         if bounce.get("point_index") is None:
             reasons.append("outside_point_range")
@@ -1238,6 +1267,7 @@ def build_analysis(rows, args):
     point_ranges = parse_point_ranges(args.point_frames)
     winners = parse_sides(args.point_winners)
     official_double_fault_points = parse_indexes(args.official_double_fault_points)
+    official_first_serve_in_points = parse_indexes(args.official_first_serve_in_points)
     excluded_bounce_frame_ranges = parse_frame_ranges(args.exclude_bounce_frames)
     if point_ranges and winners and len(point_ranges) != len(winners):
         raise ValueError("--point-frames and --point-winners must have the same number of entries")
@@ -1293,6 +1323,23 @@ def build_analysis(rows, args):
         )
 
     live_bounces = [bounce for bounce in raw_bounces if bounce.get("live")]
+    serve_attempts_by_bounce_id = {}
+    bounces_by_point_for_serves = {}
+    for bounce in live_bounces:
+        bounces_by_point_for_serves.setdefault(bounce.get("point_index"), []).append(bounce)
+    for point_index, point_bounces in bounces_by_point_for_serves.items():
+        if point_index is None:
+            continue
+        serve_analysis_for_shots = infer_serve_sequence(
+            point_bounces,
+            args.server,
+            args.receiver,
+            official_double_fault=point_index in official_double_fault_points,
+            official_first_serve_in=point_index in official_first_serve_in_points,
+        )
+        for attempt in serve_analysis_for_shots.get("attempts") or []:
+            serve_attempts_by_bounce_id[attempt.get("bounce_id")] = attempt
+
     previous_bounce_frame = None
     previous_bounce_record = None
     point_shot_counts = {}
@@ -1314,8 +1361,19 @@ def build_analysis(rows, args):
         handedness = args.near_handedness if shot["player"] == "near" else args.far_handedness
         shot_row = by_frame.get(shot["frame"])
         point_shot_counts[point_index] = point_shot_counts.get(point_index, 0) + 1
-        shot_type = shot_type_for_link(point_shot_counts[point_index], shot["player"], args.server, args.receiver)
-        stroke = infer_stroke(shot, shot_row, handedness)
+        point_shot_index = point_shot_counts[point_index]
+        serve_attempt = serve_attempts_by_bounce_id.get(bounce.get("id"))
+        serve_attempt_number = serve_attempt.get("attempt") if serve_attempt else None
+        shot_type = shot_type_for_link(point_shot_index, shot["player"], args.server, args.receiver, serve_attempt_number)
+        shot_player = serve_attempt.get("server") if serve_attempt else shot["player"]
+        if serve_attempt_number:
+            stroke = {
+                "side": "serve",
+                "confidence": "high",
+                "reason": "serve_attempt_bounce",
+            }
+        else:
+            stroke = infer_stroke(shot, shot_row, handedness)
         stroke_side = stroke["side"]
         speed = estimate_speed(shot, bounce, previous_bounce_record, args.fps)
         shot_id = f"shot_{shot_index:03d}"
@@ -1323,16 +1381,19 @@ def build_analysis(rows, args):
         shot_record = {
             "id": shot_id,
             "frame": shot["frame"],
-            "player": shot["player"],
+            "player": shot_player,
             "point": shot.get("point"),
             "world_point": shot.get("world_point"),
             "stroke_side": stroke_side,
             "stroke_confidence": stroke["confidence"],
             "stroke_reason": stroke["reason"],
             "type": shot_type,
+            "serve_attempt": serve_attempt_number,
             "speed": speed,
             "quality": shot.get("quality"),
             "debug": {
+                "original_player": shot.get("player"),
+                "player_overridden_by_serve_attempt": bool(serve_attempt_number and shot.get("player") != shot_player),
                 "player_distance_px": shot.get("player_distance_px"),
                 "racket_distance_px": shot.get("racket_distance_px"),
                 "racket_bbox": shot.get("racket_bbox"),
@@ -1353,6 +1414,7 @@ def build_analysis(rows, args):
                 "stroke_side": stroke_side,
                 "stroke_confidence": stroke["confidence"],
                 "shot_type": shot_type,
+                "serve_attempt": serve_attempt_number,
                 "speed_mph": speed["mph"],
                 "quality": min_quality(shot_record["quality"], speed["quality"]),
             }
@@ -1410,6 +1472,7 @@ def build_analysis(rows, args):
             current_server_side,
             current_receiver_side,
             official_double_fault=index in official_double_fault_points,
+            official_first_serve_in=index in official_first_serve_in_points,
         )
         terminal_state = terminal_ball_state(rows, point_range, inv_homography)
         last_bounce_frame = max([bounce["frame"] for bounce in point_bounces], default=point_range["start_frame"])

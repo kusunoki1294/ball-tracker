@@ -26,7 +26,7 @@ EXPECTED_POINTS = [
     },
     {
         "index": 2,
-        "serve_state": "second_serve_in",
+        "serve_state": "first_serve_in",
         "serve_confidence": "high",
         "point_end_reason": "out",
         "point_end_type": "unforced_error_out",
@@ -80,6 +80,15 @@ REQUIRED_AUDIT_COLUMNS = {
 
 EXPECTED_MISSED_BOUNCE_CANDIDATES = []
 
+EXPECTED_SHOT_TYPES = {
+    "shot_001": {"type": "first_serve", "player": "far", "serve_attempt": 1},
+    "shot_002": {"type": "second_serve", "player": "far", "serve_attempt": 2},
+    "shot_012": {"type": "first_serve", "player": "far", "serve_attempt": 1},
+    "shot_013": {"type": "return", "player": "near", "serve_attempt": None},
+    "shot_018": {"type": "first_serve", "player": "far", "serve_attempt": 1},
+    "shot_019": {"type": "second_serve", "player": "far", "serve_attempt": 2},
+}
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Validate known-good tennis9 analysis outputs.")
@@ -97,6 +106,16 @@ def parse_args():
         "--point-debug-dir",
         default="yoloVids/outputs/tennis9/play_segments/point_debug",
         help="Directory of per-point debug PNGs produced by export_tennis_audit.py.",
+    )
+    parser.add_argument(
+        "--report",
+        default="yoloVids/outputs/tennis9/play_segments/match_report.html",
+        help="Static HTML report produced by export_match_report.py.",
+    )
+    parser.add_argument(
+        "--report-data",
+        default="yoloVids/outputs/tennis9/play_segments/match_report_data.json",
+        help="Compact report JSON produced by export_match_report.py.",
     )
     return parser.parse_args()
 
@@ -142,6 +161,14 @@ def validate_points(analysis):
     for expected, actual in zip(EXPECTED_MISSED_BOUNCE_CANDIDATES, candidates):
         for key, value in expected.items():
             check_equal(errors, f"missed bounce candidate {expected['frame']} {key}", actual.get(key), value)
+    shots_by_id = {shot.get("id"): shot for shot in analysis.get("shots") or []}
+    for shot_id, expected in EXPECTED_SHOT_TYPES.items():
+        shot = shots_by_id.get(shot_id)
+        if not shot:
+            errors.append(f"{shot_id}: missing")
+            continue
+        for key, value in expected.items():
+            check_equal(errors, f"{shot_id} {key}", shot.get(key), value)
     return errors
 
 
@@ -166,6 +193,33 @@ def validate_point_debug_images(directory):
     return errors
 
 
+def validate_report(path):
+    if not os.path.exists(path):
+        return [f"missing match report: {path}"]
+    if os.path.getsize(path) <= 0:
+        return [f"empty match report: {path}"]
+    with open(path, "r", encoding="utf-8") as handle:
+        content = handle.read()
+    required = ["Point By Point", "Serve States", "Point Endings", "Shots", "Bounces"]
+    missing = [text for text in required if text not in content]
+    if missing:
+        return [f"match report missing sections: {', '.join(missing)}"]
+    return []
+
+
+def validate_report_data(path):
+    if not os.path.exists(path):
+        return [f"missing match report data: {path}"]
+    payload = load_json(path)
+    errors = []
+    check_equal(errors, "report data final_game_score", (payload.get("summary") or {}).get("final_game_score"), "0-1")
+    check_equal(errors, "report data point count", len(payload.get("points") or []), len(EXPECTED_POINTS))
+    for key in ["serve_states", "point_endings", "points_won", "trusted_stroke_sides"]:
+        if key not in (payload.get("stats") or {}):
+            errors.append(f"report data missing stats.{key}")
+    return errors
+
+
 def main():
     args = parse_args()
     errors = []
@@ -173,6 +227,8 @@ def main():
     errors.extend(validate_points(analysis))
     errors.extend(validate_audit_csv(args.audit_csv))
     errors.extend(validate_point_debug_images(args.point_debug_dir))
+    errors.extend(validate_report(args.report))
+    errors.extend(validate_report_data(args.report_data))
     if errors:
         print("tennis9 regression validation failed:", file=sys.stderr)
         for error in errors:

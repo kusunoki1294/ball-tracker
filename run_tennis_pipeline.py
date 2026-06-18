@@ -9,6 +9,7 @@ def parse_args():
     parser.add_argument("--manifest", required=True, help="Analysis/render manifest JSON.")
     parser.add_argument("--skip-analysis", action="store_true", help="Render from the existing analysis JSON.")
     parser.add_argument("--skip-audit", action="store_true", help="Skip audit CSV/summary/court-map exports.")
+    parser.add_argument("--skip-report", action="store_true", help="Skip static HTML report export.")
     parser.add_argument("--skip-render", action="store_true", help="Only regenerate the analysis JSON.")
     return parser.parse_args()
 
@@ -37,6 +38,15 @@ def audit_config(manifest):
     if not isinstance(audit, dict):
         raise ValueError("manifest field 'audit' must be an object")
     return audit
+
+
+def report_config(manifest):
+    report = manifest.get("report")
+    if report is None:
+        return None
+    if not isinstance(report, dict):
+        raise ValueError("manifest field 'report' must be an object")
+    return report
 
 
 def main():
@@ -69,6 +79,30 @@ def main():
             "--court-map",
             court_map,
         ]
+        if point_debug_dir:
+            command.extend(["--point-debug-dir", point_debug_dir])
+        run_command(command)
+
+    report = report_config(manifest)
+    if report and not args.skip_report:
+        output = report.get("output")
+        if not output:
+            raise ValueError("report config must define 'output'")
+        command = [
+            sys.executable,
+            "export_match_report.py",
+            "--analysis",
+            analysis_path,
+            "--output",
+            output,
+        ]
+        title = report.get("title")
+        if title:
+            command.extend(["--title", title])
+        data_json = report.get("data_json")
+        if data_json:
+            command.extend(["--data-json", data_json])
+        point_debug_dir = report.get("point_debug_dir") or (audit or {}).get("point_debug_dir")
         if point_debug_dir:
             command.extend(["--point-debug-dir", point_debug_dir])
         run_command(command)

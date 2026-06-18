@@ -79,6 +79,10 @@ def match_scores_for_display(point, show_result):
 
 
 def shot_label(shot):
+    if shot.get("type") == "first_serve":
+        return "1st serve"
+    if shot.get("type") == "second_serve":
+        return "2nd serve"
     stroke_confidence = shot.get("stroke_confidence")
     if stroke_confidence in {"medium", "high"}:
         stroke = {"forehand": "FH", "backhand": "BH", "body": "BODY"}.get(shot.get("stroke_side"), "SHOT")

@@ -39,8 +39,12 @@
     3,
     4
   ],
+  "official_first_serve_in_points": [
+    2
+  ],
   "exclude_bounce_frames": [
-    1243
+    1243,
+    1303
   ],
   "initial_game_score": "0-0",
   "initial_set_score": "0-0",
@@ -50,6 +54,12 @@
     "csv": "yoloVids/outputs/tennis9/play_segments/ai9.5.audit.csv",
     "summary_json": "yoloVids/outputs/tennis9/play_segments/ai9.5.audit.summary.json",
     "court_map": "yoloVids/outputs/tennis9/play_segments/ai9.5.court_map.png",
+    "point_debug_dir": "yoloVids/outputs/tennis9/play_segments/point_debug"
+  },
+  "report": {
+    "title": "Tennis9 Tracking Report",
+    "output": "yoloVids/outputs/tennis9/play_segments/match_report.html",
+    "data_json": "yoloVids/outputs/tennis9/play_segments/match_report_data.json",
     "point_debug_dir": "yoloVids/outputs/tennis9/play_segments/point_debug"
   },
   "renders": [

@@ -15,6 +15,7 @@ Current status
   - point/game/set scoring
   - audit CSV/summary exports
   - per-point debug court-map PNGs
+  - static HTML match report
   - red-mark and clean overlay renders
 - The YOLO-only tracker is still experimental for:
   - bounce detection
@@ -92,6 +93,7 @@ python run_tennis_pipeline.py --manifest manifests/tennis9_analysis_manifest.jso
 
 This writes per-point debug PNGs to `yoloVids/outputs/tennis9/play_segments/point_debug/`.
 Magenta `B?` markers are conservative trajectory-based missed-bounce candidates for review; they are not counted as live scoring bounces.
+It also writes a browser-readable report to `yoloVids/outputs/tennis9/play_segments/match_report.html` and compact structured data to `match_report_data.json`.
 
 After regenerating tennis9 outputs, validate the known-good scoring and point-ending behavior:
 
