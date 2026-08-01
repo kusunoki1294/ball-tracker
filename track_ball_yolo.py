@@ -1057,6 +1057,41 @@ def calibration_fits_frame(court_calib, frame_shape, margin_px=24):
     return True
 
 
+def calibration_plausible_for_frame(court_calib, frame_shape):
+    """Geometric sanity check that a calibration actually matches this video.
+
+    ``calibration_fits_frame`` only verifies the points fall inside the frame,
+    so a calibration built for a different resolution/court (e.g. an old 1280x720
+    file reused on 1080p footage) passes it while mapping the court to the wrong
+    place. That silently makes the court filter reject most real ball detections.
+
+    A genuine behind-the-baseline calibration always has the court spanning a
+    large vertical slice of the frame, the near baseline low in the frame, and
+    the near baseline wider than the far baseline (perspective). Returns
+    (ok, reason).
+    """
+    if not court_calib or court_calib.get("points") is None:
+        return True, ""
+    frame_h, frame_w = frame_shape[:2]
+    if frame_h <= 0:
+        return True, ""
+    # points are ordered near_left, near_right, far_right, far_left
+    pts = court_calib["points"]
+    ys = [p[1] for p in pts]
+    near_l, near_r, far_r, far_l = pts
+    vspan = (max(ys) - min(ys)) / frame_h
+    near_y_frac = max(ys) / frame_h
+    near_w = abs(near_r[0] - near_l[0])
+    far_w = abs(far_r[0] - far_l[0])
+    if vspan < 0.33:
+        return False, f"court spans only {vspan:.0%} of frame height (expected >=33%)"
+    if near_y_frac < 0.62:
+        return False, f"near baseline at {near_y_frac:.0%} of frame height (expected >=62%, i.e. low in frame)"
+    if near_w <= far_w * 1.1:
+        return False, f"near baseline ({near_w:.0f}px) not wider than far baseline ({far_w:.0f}px)"
+    return True, ""
+
+
 def project_to_court_world(center, inv_homography):
     if center is None or inv_homography is None:
         return None
@@ -2383,6 +2418,15 @@ def main():
             f"the video frame {width}x{height}."
         )
         court_calib = None
+    if court_calib is not None:
+        plausible, reason = calibration_plausible_for_frame(court_calib, (height, width, 3))
+        if not plausible:
+            print(
+                f"Warning: ignoring court calibration {args.court_calib_file} because it does not "
+                f"match this {width}x{height} video ({reason}). Ball tracking will run without court "
+                f"filtering. Provide a calibration for this camera to restore bounce/mini-court logic."
+            )
+            court_calib = None
 
     inv_court_homography = build_inverse_court_homography(court_calib)
     fallback_net_y = None
