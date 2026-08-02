@@ -60,9 +60,9 @@ def make_sample(rng, W=960, H=540):
     scol = [int(rng.integers(70, 150)), int(rng.integers(60, 130)), int(rng.integers(40, 110))]
     cv2.fillConvexPoly(img, surf[[0, 1, 2, 3]], scol)
     # surround apron slightly different tone (draw a bigger faint quad behind)
-    # white lines
+    # white lines (thickness scaled to render resolution to match real squished courts)
     line_col = int(rng.integers(190, 255))
-    thick = int(rng.integers(2, 5))
+    thick = max(1, int(round(W / 256.0 * rng.uniform(1.0, 2.4))))
     for (x0, y0, x1, y1) in COURT_LINES:
         p = proj([(x0, y0), (x1, y1)]).astype(np.int32)
         faint = rng.random() < 0.12  # occasionally fade an interior line
@@ -72,7 +72,7 @@ def make_sample(rng, W=960, H=540):
     # net occlusion band across the court at y=NET
     if rng.random() < 0.9:
         p = proj([(NET_LINE[0], NET_LINE[1]), (NET_LINE[2], NET_LINE[3])]).astype(np.int32)
-        band = int(rng.integers(8, 26))
+        band = max(2, int(round(W / 256.0 * rng.uniform(2.5, 7.0))))
         netcol = int(rng.integers(20, 90))
         cv2.line(img, tuple(p[0]), tuple(p[1]), (netcol, netcol, netcol), band, cv2.LINE_AA)
 

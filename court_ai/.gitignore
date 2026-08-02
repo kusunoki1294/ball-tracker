@@ -2,3 +2,5 @@ _synth_preview/
 _checkpoints/
 _eval/
 *.pt
+_data/
+*.npz
