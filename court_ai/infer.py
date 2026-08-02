@@ -12,6 +12,7 @@ import torch
 
 from court_ai.model import CourtNet, INPUT_SIZE
 from court_ai.clean_court import clean_court_image
+from court_ai.preprocess import to_linemap
 from court_ai.court_geometry import CORNERS_WORLD, NET_Y, W_DOUBLES
 
 
@@ -25,10 +26,10 @@ def load_model(ckpt):
 
 def predict_corners(model, dev, court_img):
     H, W = court_img.shape[:2]
-    inp = cv2.resize(court_img, (INPUT_SIZE, INPUT_SIZE))
-    x = torch.from_numpy(inp).permute(2, 0, 1).float().unsqueeze(0) / 255.0
+    lm = to_linemap(court_img, size=INPUT_SIZE)  # domain-invariant 1-channel
+    x = torch.from_numpy(lm).unsqueeze(0).unsqueeze(0).float().to(dev)
     with torch.no_grad():
-        pred = model(x.to(dev)).cpu().numpy()[0]  # (4,2) normalized
+        pred = model(x).cpu().numpy()[0]  # (4,2) normalized
     return pred * np.array([W, H], dtype=np.float32)
 
 

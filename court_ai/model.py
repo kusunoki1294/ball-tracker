@@ -22,7 +22,7 @@ class CourtNet(nn.Module):
     def __init__(self):
         super().__init__()
         self.features = nn.Sequential(
-            _block(3, 32),    # 256 -> 128
+            _block(1, 32),    # 256 -> 128 (input is a 1-channel line map)
             _block(32, 64),   # 128 -> 64
             _block(64, 96),   # 64 -> 32
             _block(96, 128),  # 32 -> 16
