@@ -27,12 +27,69 @@ Current status
   - red-mark render: `yoloVids/outputs/tennis9/play_segments/ai9.5.avi`
   - clean render: `yoloVids/outputs/tennis9/play_segments/ai9.6.avi`
 
+Making it work on any video (2026 update)
+The goal of this round of work was to make the system work on arbitrary
+behind-the-baseline footage, not just the tennis9 clip. A second test video was
+added (tennis10: a SwingVision singles match with the same camera angle,
+`yoloVids/inputs/tennis10_input.mp4`, downloaded and normalized to 1080p/30fps).
+Testing on it surfaced and fixed the main things that made the system brittle
+across videos.
+
+1. The stale-calibration footgun (fixed)
+   - `track_ball_yolo.py` defaults `--court-calib-file` to `court_calib.json`,
+     and only checked that the points fell inside the frame. A stale ~1280x720
+     tennis6/7 calibration therefore passed that check on 1080p footage while
+     mapping the court to the wrong place, so the court filter silently rejected
+     most real ball detections.
+   - Effect on tennis10: in-rally ball recall was only 41% because ~44% of real
+     ball detections were being thrown away by the court filter (the ball model
+     itself detects the ball in ~94% of rally frames).
+   - Fix: `calibration_plausible_for_frame()` rejects a calibration that clearly
+     does not match this video (court must span a large vertical slice of the
+     frame, near baseline low in the frame, near baseline wider than far). On a
+     mismatch the tracker warns and runs WITHOUT court filtering instead of
+     silently degrading. tennis10 recall went 41% -> 78% with no override.
+   - Net result: ball, player, and object tracking now work out of the box on
+     any behind-baseline clip, with no per-video setup.
+
+2. Automatic court calibration (new: court_ai/)
+   - Precise court geometry is still needed for bounce localization, the mini
+     court overlay, side classification, and scoring. Hand calibration does not
+     scale to "any video", and classical line detection could not reliably find
+     the far baseline (faint and occluded by the net).
+   - `court_ai/` trains a small CNN (CourtNet) to regress the 4 doubles-court
+     corners. It is trained on 100% synthetic data (the court geometry rendered
+     through random behind-baseline homographies with net bands, player
+     occlusions, and clutter), so no manual labeling is needed.
+   - Sim2real transfer only worked after switching the model input to a
+     domain-invariant "top-hat line map" (thin bright lines isolated regardless
+     of court/background brightness). With RGB input the model failed on real
+     courts (417px corner error); with the line map it produces accurate
+     calibrations that visually trace the real tennis9 and tennis10 courts
+     (balls project to world coords centered on the court, median x=17.4 with
+     court center at 18).
+   - See `court_ai/README.md` for the pipeline and reproduction steps.
+
+3. Key finding: an accurate calibration LOWERS raw ball recall
+   - Feeding the accurate model calibration to the tracker dropped raw recall to
+     64.7% vs 81% with no court filter. This is NOT a calibration error: a ball
+     in the air projects through the ground homography to a world point outside
+     the court (measured world y down to -103, well past the far baseline), so
+     the court filter rejects it.
+   - Recommended architecture (not yet implemented): do NOT gate in-flight ball
+     candidates on the court bounds (keep recall high, as the guardrail already
+     does when no calibration is present), and use the accurate calibration only
+     for its real purpose - bounce localization, mini court, side classification,
+     and scoring. Decoupling those two uses in `track_ball_yolo.py` is the next
+     step.
+
 Files
 - `track_ball.py`: original tracker with HSV/motion and optional YOLO support
-- `track_ball_yolo.py`: YOLO-only tracker for ball, players, other objects, experimental bounce markers, and a mini court overlay with mapped ball/bounce points
-- `court_calib.json`: saved court calibration data
+- `track_ball_yolo.py`: YOLO-only tracker for ball, players, other objects, experimental bounce markers, and a mini court overlay with mapped ball/bounce points. Now rejects a mismatched court calibration (`calibration_plausible_for_frame`) instead of silently degrading.
+- `court_ai/`: automatic court-calibration model. Trains a CNN on synthetic courts to predict the 4 corners from a real frame; writes a `track_ball_yolo` calibration JSON. See `court_ai/README.md`.
+- `court_calib.json`: saved court calibration data (legacy 1280x720; do not rely on it for 1080p footage)
 - `vids/`: older sample videos, model files, helper files
-- `yoloVids/`: newer YOLO workflow videos and renders
+- `yoloVids/`: newer YOLO workflow videos and renders (gitignored). Inputs live in `yoloVids/inputs/`, calibrations in `yoloVids/calibration/`.
 - `yolo.txt`: YOLO reference links
 
 Requirements
@@ -232,9 +289,18 @@ Latest tennis9 analysis notes
 - `validate_tennis9_regression.py` checks the known-good serve states, point endings, scoring, audit columns, and point debug images.
 
 Immediate next step
-- Rerun `track_ball_yolo.py` to regenerate the tennis9 JSONL with the physical jump gate enabled, then rerun the manifest pipeline.
-- Review any remaining visible ball jumps and compare them against `ball_debug.selector.rejected_candidates`.
-- Only promote missed-bounce candidates into live bounces after visual review proves they are true court bounces.
+- Decouple ball-candidate court filtering from the court calibration in
+  `track_ball_yolo.py`: keep in-flight ball tracking un-gated (max recall, as the
+  guardrail already does with no calib), and use the (now automatic, accurate)
+  calibration only for bounce localization, the mini court, side classification,
+  and scoring. This is the fix that gives BOTH high recall and accurate bounces.
+- Then wire `court_ai/infer.py` into the tennis10 workflow: generate
+  `court_calib_tennis10_model.json`, build a tennis10 manifest with point_frames
+  and winners, and run the analysis pipeline end to end as a second known-good.
+- Older tennis9 track: the JSONL was already regenerated with the physical jump
+  gate; review any remaining visible ball jumps against
+  `ball_debug.selector.rejected_candidates` and only promote missed-bounce
+  candidates after visual review confirms they are true court bounces.
 
 Environment issues encountered
 - Ultralytics `track()` pulled in a missing `lap` dependency, so the YOLO-only script uses a custom simple tracker instead.
@@ -272,8 +338,20 @@ Recommended workflow
 8. Tune one problem at a time.
 
 Current takeaway
-- YOLO-only ball and player tracking is usable.
-- Far-ball tracking needed special handling because of the wide-angle phone footage.
-- Bounce marking and missed-bounce recovery are still experimental and should not be treated as scoring truth without review.
-- Hit detection is intentionally disabled for now while bounce quality is being improved.
-- The next concrete task is regenerating tennis9 tracking logs with the physical jump gate and reviewing any remaining jumps.
+- Ball, player, and object tracking now work out of the box on any behind-the-
+  baseline clip. The calibration guardrail stops a mismatched calibration from
+  silently wrecking recall (tennis10: 41% -> 78% in-rally recall).
+- Court calibration is now automatic via `court_ai/` (a CNN trained on synthetic
+  courts, transferred to real footage with a top-hat line-map input). It produces
+  accurate calibrations on real courts without any hand clicking.
+- Known tradeoff: an accurate calibration lowers RAW ball recall because the
+  court filter rejects in-flight balls. The fix is to decouple ball-candidate
+  filtering from the calibration (see Immediate next step) so calibration is used
+  only for bounce/mini-court/scoring.
+- Bounce marking and missed-bounce recovery are still experimental and should not
+  be treated as scoring truth without review. Hit detection is intentionally
+  disabled while bounce quality is improved.
+- Far-ball tracking needed special handling because of the wide-angle phone
+  footage.
+- The next concrete task is the ball-filter / calibration decoupling, then
+  running the tennis10 analysis pipeline end to end as a second known-good.
