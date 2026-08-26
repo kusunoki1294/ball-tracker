@@ -1,0 +1,45 @@
+idx,frame,seconds,side,world_x,world_y,shape_confidence,confidence,near_player,rally_scoring_eligible,serve_landing_precondition,provenance,dvy_ft,residual_px,join_error_frames,label,note
+1,19,0.63,near,21.74,74.49,high,low,True,False,True,sampled,2.442,6.06,1.07,dead_bounce,pre-serve dribble at baseline
+2,160,5.33,far,37.9,10.79,high,low,True,False,True,sampled,19.839,3.09,0.18,racket,P1 serve strike (racket at marker)
+3,186,6.2,far,11.27,21.55,high,high,False,True,True,sampled,21.15,15.04,1.08,live_bounce,"P1 serve landing, far service box"
+4,251,8.37,near,16.51,42.81,high,high,False,True,True,sampled,6.224,0.68,0.65,live_bounce,K's net-cord return landing just over net
+5,278,9.27,near,19.39,48.39,high,high,False,True,True,sampled,4.435,0.62,0.71,live_bounce,rally bounce near court
+6,300,10.0,near,21.03,51.96,high,high,False,True,True,sampled,3.391,0.66,0.72,live_bounce,P1 second bounce (the double bounce)
+7,319,10.63,near,22.36,54.81,high,low,True,False,True,sampled,2.352,0.73,1.21,dead_bounce,ball still bouncing after point ended
+8,345,11.5,near,21.6,41.54,medium,low,True,False,True,sampled,5.715,1.17,1.68,racket,player catches ball at hand height
+9,444,14.8,near,17.72,66.55,high,low,True,False,True,sampled,8.805,3.07,0.89,racket,"ball carried in hand, no bounce"
+10,510,17.0,near,17.12,77.49,high,low,True,False,True,sampled,2.719,2.99,0.11,dead_bounce,pre-serve dribble
+11,534,17.8,near,17.12,77.46,high,low,True,False,True,sampled,2.682,2.94,0.2,dead_bounce,pre-serve dribble
+12,558,18.6,near,17.06,77.12,high,low,True,False,True,sampled,2.811,3.68,0.34,dead_bounce,pre-serve dribble
+13,580,19.33,near,15.69,76.86,medium,low,True,False,True,interpolated,1.775,2.74,3.05,tracking_artifact,no ball visible at marker in any frame
+14,611,20.37,near,18.44,59.88,medium,low,True,False,True,sampled,6.345,4.43,2.44,racket,serve toss/contact region
+15,652,21.73,far,21.2,38.2,medium,low,True,False,True,sampled,1.779,0.99,3.46,ambiguous,"P2 'serve landing' but ball is AT THE NET, not on ground"
+16,787,26.23,far,21.05,1.71,high,low,True,False,True,sampled,19.328,1.34,0.53,racket,far player contact at baseline
+17,967,32.23,near,23.7,66.14,high,low,True,False,True,sampled,5.121,7.6,0.39,racket,near player contact
+18,991,33.03,near,27.83,69.87,medium,low,True,False,True,sampled,5.018,9.73,3.35,racket,near player contact
+19,1013,33.77,far,14.88,27.33,high,high,False,True,True,sampled,8.323,2.46,0.08,ambiguous,"far service box, ball too small to adjudicate"
+20,1075,35.83,near,16.95,73.91,high,low,True,False,True,sampled,4.741,5.62,1.11,live_bounce,deep near-court bounce
+21,1104,36.8,far,14.69,21.65,high,high,False,True,True,sampled,13.431,9.85,0.93,ambiguous,"far service box, ball too small to adjudicate"
+22,1145,38.17,far,37.58,0.78,medium,medium,False,True,True,interpolated,12.168,5.19,0.94,live_bounce,ball landing OUT beyond far baseline/sideline
+23,1511,50.37,far,-1.19,3.44,low,low,False,False,False,sampled,7.495,3.47,3.84,live_bounce,"P3 first serve landing, wide and long = fault"
+24,1636,54.53,near,25.04,62.87,high,low,True,False,True,sampled,12.476,3.61,1.08,racket,pre-serve toss
+25,1660,55.33,far,32.78,-0.82,high,low,True,False,True,sampled,14.229,1.76,1.2,racket,P3 second serve strike echo (+1 frame)
+26,1682,56.07,far,14.8,37.92,medium,medium,False,True,True,sampled,1.191,2.04,1.19,ambiguous,P3 'second serve landing' but ball is AT THE NET
+27,1922,64.07,near,14.51,65.25,medium,low,True,False,True,sampled,1.771,1.29,0.4,racket,ball carried in hand
+28,1985,66.17,near,16.8,77.32,high,low,True,False,True,sampled,2.77,4.17,0.4,dead_bounce,pre-serve dribble
+29,2020,67.33,near,16.8,76.58,high,low,True,False,True,sampled,2.606,2.48,0.83,dead_bounce,pre-serve dribble
+30,2042,68.07,near,15.45,73.38,medium,low,True,False,True,sampled,1.031,4.28,0.42,racket,ball carried in hand
+31,2114,70.47,far,27.19,16.17,medium,low,True,False,True,sampled,65.288,17.47,2.33,live_bounce,P4 serve landing near far service line
+32,2146,71.53,far,25.12,32.94,high,high,False,True,True,sampled,6.521,0.85,1.45,live_bounce,"far court rally bounce, shadow confirms ground"
+33,2179,72.63,near,22.8,41.66,medium,low,True,False,True,interpolated,1.8,0.51,3.48,ambiguous,"low ball near net, ground contact unclear"
+34,2253,75.1,near,24.05,52.38,high,low,True,False,True,sampled,6.757,3.11,0.85,live_bounce,"near court bounce, shadow confirms ground"
+35,2505,83.5,near,15.6,78.39,high,low,True,False,True,sampled,3.171,2.81,1.46,tracking_artifact,no ball visible at marker
+36,2739,91.3,near,14.02,74.44,medium,low,True,False,True,sampled,15.751,8.72,3.13,racket,ball carried in hand
+37,2774,92.47,near,16.52,76.79,high,low,True,False,True,sampled,3.075,3.48,0.44,dead_bounce,"pre-serve dribble, shadow confirms ground"
+38,2798,93.27,near,16.39,75.51,high,low,True,False,True,sampled,2.433,5.03,0.13,dead_bounce,pre-serve dribble on racket
+39,2876,95.87,near,16.64,76.26,high,low,True,False,True,sampled,2.673,3.26,1.26,dead_bounce,pre-serve dribble
+40,2898,96.6,near,15.32,73.44,medium,low,True,False,True,sampled,2.563,6.14,3.44,racket,ball carried in hand
+41,2976,99.2,far,29.93,20.68,high,high,False,True,True,sampled,11.2,8.46,0.68,live_bounce,P6 serve landing
+42,3016,100.53,far,23.19,33.39,high,high,False,True,True,sampled,12.748,15.24,0.61,live_bounce,"far court bounce, shadow confirms ground"
+43,3157,105.23,near,19.22,50.31,medium,medium,False,True,True,sampled,14.775,16.99,1.74,tracking_artifact,no ball visible at marker
+44,3258,108.6,far,25.66,3.7,high,low,True,False,True,sampled,5.118,1.95,0.55,racket,player carrying ball at changeover
