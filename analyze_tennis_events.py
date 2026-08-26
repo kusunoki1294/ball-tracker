@@ -52,6 +52,15 @@ MAX_SERVE_FLIGHT_SECONDS = 1.5
 # 0.4s even at high pace, and the measured landings sit at 0.57-0.87s, so this
 # floor excludes the strike echo without touching a real landing.
 MIN_SERVE_FLIGHT_SECONDS = 0.33
+# A ball that clips the net cord registers as a bounce, and its ground
+# projection lands within a foot or so of the net line -- close enough that the
+# service-box test would adjudicate it as a landing. It is not one: the ball has
+# not reached the ground, and whether it drops over or short cannot be told from
+# ground geometry at that distance. Measured net contacts sit 0.8-1.1ft from the
+# line while the nearest genuine serve landing is 17.5ft, so this band is safe
+# and nowhere near a real landing. Applied on both sides, since a clipped ball
+# projects to either.
+NET_LINE_CONTACT_BAND_FT = 2.0
 
 
 def parse_args():
@@ -591,6 +600,77 @@ def estimate_speed(shot, bounce, previous_bounce, fps):
     }
 
 
+def server_feet_world(row, server_side, inv_homography):
+    """Ground-plane world position of the server's feet, or None.
+
+    The feet are ON the ground, which is the one place the ground homography is
+    actually valid - unlike the ball at contact, which is airborne.
+    """
+    if not row:
+        return None
+    player = row.get("player_near") if server_side == "near" else row.get("player_far")
+    if not player or not player.get("bbox"):
+        return None
+    x0, _y0, x1, y1 = player["bbox"]
+    return project_to_court_world(((x0 + x1) / 2.0, float(y1)), inv_homography)
+
+
+def estimate_serve_speed(attempt, bounce, rows_by_frame, inv_homography, fps):
+    """Average speed of a serve across its flight.
+
+    Anchored at the CONTACT frame and at the server's FEET. The general shot
+    path got both ends wrong for serves, in the same direction:
+
+    * the shot is anchored at the toss, ~22 frames before contact on tennis11,
+      which roughly doubles the flight time; and
+    * the shot's world point is the BALL at that instant, which is airborne
+      above the server, so projecting it through the ground homography puts the
+      origin well behind the baseline and inflates the distance too.
+
+    Both errors depress the result, which is why serves were reading 10-25mph.
+
+    This is an average over the flight, not racket speed. The ball decelerates
+    after contact, so this number is lower than a radar reading and must not be
+    presented as one.
+    """
+    empty = {"mph": None, "kmh": None, "quality": "missing",
+             "source": "serve_contact_feet_to_bounce_average"}
+    contact_frame = attempt.get("contact_frame")
+    bounce_world = bounce.get("world_point")
+    if contact_frame is None or not bounce_world:
+        return {**empty, "reason": "missing_contact_frame_or_bounce"}
+    origin = server_feet_world(
+        rows_by_frame.get(int(contact_frame)), attempt.get("server"), inv_homography
+    )
+    if origin is None:
+        # No fallback to the ball's projected position on purpose: that airborne
+        # projection is the error this function exists to remove, and a
+        # plausible-looking wrong speed is worse than an absent one.
+        return {**empty, "reason": "server_not_detected_at_contact"}
+
+    frame_delta = max(1, int(bounce["frame"]) - int(contact_frame))
+    seconds = frame_delta / fps
+    distance_ft = math.hypot(bounce_world[0] - origin[0], bounce_world[1] - origin[1])
+    ft_per_sec = distance_ft / seconds
+    mph = ft_per_sec * FT_PER_SEC_TO_MPH
+    if mph < 15.0 or mph > 140.0:
+        quality = "low"
+    elif frame_delta <= 45:
+        quality = "high"
+    else:
+        quality = "medium"
+    return {
+        "mph": round(mph, 1),
+        "kmh": round(ft_per_sec * FT_PER_SEC_TO_KMH, 1),
+        "flat_distance_ft": round(distance_ft, 1),
+        "flight_frames": frame_delta,
+        "source": "serve_contact_feet_to_bounce_average",
+        "quality": quality,
+        "contact_frame": int(contact_frame),
+        "origin_world_point": [round(origin[0], 2), round(origin[1], 2)],
+    }
+
+
 def tennis_score_label(points_won):
     labels = ["0", "15", "30", "40"]
     return labels[points_won] if points_won < len(labels) else "40"
@@ -755,19 +835,34 @@ def bounce_after_serve_contact(point_bounces, contact_frame, used_bounce_ids, fp
     old code took the point's first bounces and hoped they were serves, which
     is what let rally bounces be judged against the service box.
     """
+    skipped_net_line = []
     for bounce in point_bounces:
         if bounce["frame"] <= contact_frame or bounce["id"] in used_bounce_ids:
             continue
         lag = bounce["frame"] - contact_frame
         if lag > frame_window(MAX_SERVE_FLIGHT_SECONDS, fps):
-            return None
+            return None, skipped_net_line
         if lag < frame_window(MIN_SERVE_FLIGHT_SECONDS, fps):
             # Too soon to be a landing: this is the strike itself showing up in
             # the bounce stream as a trajectory reversal. Skip it and keep
             # looking, rather than judging the serve on the racket.
             continue
-        return bounce
-    return None
+        if bounce_on_net_line(bounce):
+            # The ball met the net, not the ground. Keep looking for the real
+            # landing rather than sending a net contact to the service-box test,
+            # which reads it as "in" whenever it projects a hair past the line.
+            skipped_net_line.append(bounce["id"])
+            continue
+        return bounce, skipped_net_line
+    return None, skipped_net_line
+
+
+def bounce_on_net_line(bounce):
+    """Is this bounce close enough to the net line to be a net contact?"""
+    world_point = bounce.get("world_point")
+    if not world_point:
+        return False
+    return abs(world_point[1] - COURT_NET_Y_FT) <= NET_LINE_CONTACT_BAND_FT
 
 
 def serve_can_be_followed_by_second(attempt, serve_motions, attempts_so_far):
@@ -803,7 +898,9 @@ def serve_can_be_followed_by_second(attempt, serve_motions, attempts_so_far):
     return True, None
 
 
-def serve_attempt_from_motion(motion, bounce, server, receiver, attempt_number):
+def serve_attempt_from_motion(
+    motion, bounce, server, receiver, attempt_number, net_line_bounce_ids=()
+):
     """A serve attempt built from a detected strike, with or without its bounce."""
     if bounce is None:
         return {
@@ -813,7 +910,16 @@ def serve_attempt_from_motion(motion, bounce, server, receiver, attempt_number):
             "server": server,
             "receiver": receiver,
             "result": "unknown",
-            "reason": "serve_bounce_not_detected",
+            # Distinguish "nothing was detected at all" from "something was, but
+            # it was the net rather than the ground". The second is a stronger
+            # statement: the serve was struck and met the net cord, and the
+            # analyzer is declining to guess whether it dropped over or short.
+            "reason": (
+                "serve_bounce_net_line_contact"
+                if net_line_bounce_ids
+                else "serve_bounce_not_detected"
+            ),
+            "net_line_bounce_ids": list(net_line_bounce_ids),
             "service_box_side": None,
             "world_point": None,
             "contact_frame": motion["contact_frame"],
@@ -845,6 +951,7 @@ def infer_serve_sequence_from_motions(
     """Serve verdict for a point whose serve strikes were located directly."""
     attempts = []
     used_bounce_ids = set()
+    net_line_bounce_ids = []
     previous_contact_frame = None
     rejection_reason = None
     for motion in serve_motions:
@@ -877,10 +984,20 @@ def infer_serve_sequence_from_motions(
             ]
             if intervening:
                 break
-        bounce = bounce_after_serve_contact(point_bounces, contact_frame, used_bounce_ids, fps)
+        bounce, skipped_net_line = bounce_after_serve_contact(
+            point_bounces, contact_frame, used_bounce_ids, fps
+        )
+        net_line_bounce_ids.extend(skipped_net_line)
         if bounce is not None:
             used_bounce_ids.add(bounce["id"])
-        attempt = serve_attempt_from_motion(motion, bounce, server, receiver, len(attempts) + 1)
+        attempt = serve_attempt_from_motion(
+            motion,
+            bounce,
+            server,
+            receiver,
+            len(attempts) + 1,
+            net_line_bounce_ids=skipped_net_line,
+        )
         attempts.append(attempt)
         allowed, rejection_reason = serve_can_be_followed_by_second(
             attempt, serve_motions, len(attempts)
@@ -908,6 +1025,10 @@ def infer_serve_sequence_from_motions(
         # Names the test that stopped a further detected strike from being
         # promoted to a second serve, so the guard can be asserted directly.
         "second_serve_rejected_reason": rejection_reason,
+        # Bounces that were passed over because they sit on the net line. Listed
+        # so a reviewer can check the specific ones rather than infer them from
+        # a verdict that went quiet.
+        "skipped_net_line_bounce_ids": net_line_bounce_ids,
     }
 
     two_faults = len(attempts) >= 2 and all(attempt["result"] == "fault" for attempt in attempts[:2])
@@ -1929,7 +2050,12 @@ def build_analysis(rows, args):
         else:
             stroke = infer_stroke(shot, shot_row, handedness)
         stroke_side = stroke["side"]
-        speed = estimate_speed(shot, bounce, previous_bounce_record, args.fps)
+        if serve_attempt_number and serve_attempt:
+            speed = estimate_serve_speed(
+                serve_attempt, bounce, by_frame, inv_homography, args.fps
+            )
+        else:
+            speed = estimate_speed(shot, bounce, previous_bounce_record, args.fps)
         shot_id = f"shot_{shot_index:03d}"
         bounce_id = bounce["id"]
         shot_record = {
