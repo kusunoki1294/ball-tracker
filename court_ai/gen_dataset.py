@@ -12,6 +12,7 @@ import numpy as np
 import cv2
 from court_ai.synth import make_sample
 from court_ai.model import INPUT_SIZE
+from court_ai.preprocess import to_linemap
 
 # 16:9 render size (matches 1920x1080 aspect); resized to INPUT_SIZE like inference.
 RENDER_W, RENDER_H = 480, 270
@@ -22,14 +23,24 @@ def main():
     ap.add_argument("--n", type=int, default=12000)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--linemap", action="store_true",
+                    help="store single-channel top-hat line maps (train.py input) "
+                         "instead of RGB, applying the exact inference preprocessing")
     args = ap.parse_args()
 
-    imgs = np.empty((args.n, INPUT_SIZE, INPUT_SIZE, 3), dtype=np.uint8)
+    if args.linemap:
+        imgs = np.empty((args.n, INPUT_SIZE, INPUT_SIZE), dtype=np.uint8)
+    else:
+        imgs = np.empty((args.n, INPUT_SIZE, INPUT_SIZE, 3), dtype=np.uint8)
     labels = np.empty((args.n, 4, 2), dtype=np.float32)
     for i in range(args.n):
         rng = np.random.default_rng(args.seed * 1_000_003 + i)
         img, label, _ = make_sample(rng, RENDER_W, RENDER_H)
-        imgs[i] = cv2.resize(img, (INPUT_SIZE, INPUT_SIZE))
+        if args.linemap:
+            # identical to inference: full render -> to_linemap(size=INPUT_SIZE)
+            imgs[i] = (to_linemap(img, size=INPUT_SIZE) * 255).astype(np.uint8)
+        else:
+            imgs[i] = cv2.resize(img, (INPUT_SIZE, INPUT_SIZE))
         labels[i] = label
         if (i + 1) % 2000 == 0:
             print(f"  {i+1}/{args.n}")

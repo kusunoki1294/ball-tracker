@@ -56,7 +56,10 @@ class CachedCourt(Dataset):
     def __getitem__(self, i):
         lm = self.images[i].copy()
         if self.augment:
-            rng = np.random.default_rng((i * 2654435761) & 0xFFFFFFFF)
+            # Seed from the per-worker, per-epoch torch seed (PyTorch reseeds each
+            # worker every epoch) combined with the sample index, so a given sample
+            # gets fresh clutter each epoch instead of the same fixed pattern.
+            rng = np.random.default_rng([torch.initial_seed() & 0xFFFFFFFF, i])
             lm = _clutter(lm, rng)
         x = torch.from_numpy(lm.astype(np.float32) / 255.0).unsqueeze(0)  # (1,256,256)
         y = torch.from_numpy(self.labels[i])
