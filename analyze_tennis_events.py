@@ -638,7 +638,12 @@ def estimate_serve_speed(attempt, bounce, rows_by_frame, inv_homography, fps):
     contact_frame = attempt.get("contact_frame")
     bounce_world = bounce.get("world_point")
     if contact_frame is None or not bounce_world:
-        return {**empty, "reason": "missing_contact_frame_or_bounce"}
+        # No serve motion was detected for this attempt, so there is no contact
+        # frame to anchor to and this method simply does not apply. Returning
+        # nothing here would silently delete speeds that the general path can
+        # still produce -- which is exactly what it did to tennis9's five serve
+        # shots. Signal "not applicable" so the caller keeps the old path.
+        return None
     origin = server_feet_world(
         rows_by_frame.get(int(contact_frame)), attempt.get("server"), inv_homography
     )
@@ -2050,11 +2055,14 @@ def build_analysis(rows, args):
         else:
             stroke = infer_stroke(shot, shot_row, handedness)
         stroke_side = stroke["side"]
+        speed = None
         if serve_attempt_number and serve_attempt:
+            # Returns None when there is no detected contact frame to anchor to,
+            # in which case the general path below still applies.
             speed = estimate_serve_speed(
                 serve_attempt, bounce, by_frame, inv_homography, args.fps
             )
-        else:
+        if speed is None:
             speed = estimate_speed(shot, bounce, previous_bounce_record, args.fps)
         shot_id = f"shot_{shot_index:03d}"
         bounce_id = bounce["id"]
