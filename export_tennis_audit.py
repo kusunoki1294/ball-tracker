@@ -110,7 +110,18 @@ def export_csv(analysis, path):
                     "exclude_reason": bounce.get("exclude_reason"),
                     "dead_ball_candidate": bounce.get("dead_ball_candidate"),
                     "dead_ball_reasons": "|".join(bounce.get("dead_ball_reasons") or []),
-                    "review_reasons": "|".join(bounce.get("review_reasons") or []),
+                    # Shots and links carry review reasons of their own (a serve
+                    # tag built from the wrong serving side, for one), and this
+                    # column is where a reviewer looks. Merging all three keeps a
+                    # flagged record from reaching the CSV looking clean, and
+                    # means a reason added to only one of them still surfaces.
+                    "review_reasons": "|".join(
+                        sorted(
+                            set(bounce.get("review_reasons") or [])
+                            | set(shot.get("review_reasons") or [])
+                            | set(link.get("review_reasons") or [])
+                        )
+                    ),
                     "point_index": bounce.get("point_index"),
                     "bounce_frame": bounce.get("frame"),
                     "bounce_side": bounce.get("side"),
