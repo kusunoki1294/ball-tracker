@@ -4,6 +4,8 @@ import math
 import os
 from bisect import bisect_left, bisect_right
 
+from bounce_detect import detect_bounces
+from serve_detect import detect_serve_motions, frame_window
 from track_ball_yolo import (
     ball_contact_point,
     build_inverse_court_homography,
@@ -25,10 +27,45 @@ NEAR_SERVICE_Y_MIN_FT = 39.0
 NEAR_SERVICE_Y_MAX_FT = 60.0
 FT_PER_SEC_TO_MPH = 0.681818
 FT_PER_SEC_TO_KMH = 1.09728
+# How close to the net line a lost ball must be to read as a net error. The ball
+# is in the air near the net, so its ground-homography projection is noisy;
+# keep this loose enough to survive that.
+NET_ERROR_MARGIN_FT = 6.0
+# A ball in the air projects through the GROUND homography to a world point well
+# outside the court (measured down to y=-103 on tennis9), so a wildly outside
+# projection means "was still in flight when tracking stopped", not "landed out".
+# Only treat a projection this far outside the court as a real landing point.
+OUT_PROJECTION_MAX_FT = 12.0
+# Consecutive bounces continue in the direction of travel. Allow a little slack
+# for spin and for noise in the projected contact point.
+DOUBLE_BOUNCE_BACKWARD_TOLERANCE_FT = 2.0
+# A served ball reaches the ground inside a second and a half even for a slow
+# second serve (the measured serves bounce 23-25 frames after contact at 30fps).
+# A bounce later than this belongs to the rally, not to the serve. Held in
+# seconds so the association scales with the clip's frame rate, exactly as the
+# motion detector's own windows do.
+MAX_SERVE_FLIGHT_SECONDS = 1.5
+# There is a floor as well as a ceiling. The ball reverses direction sharply at
+# the strike, and a bounce detector reading trajectory reversals can report that
+# as a bounce one frame after contact -- which is the strike itself, not a
+# landing. A serve crossing ~60ft cannot reach the ground faster than about
+# 0.4s even at high pace, and the measured landings sit at 0.57-0.87s, so this
+# floor excludes the strike echo without touching a real landing.
+MIN_SERVE_FLIGHT_SECONDS = 0.33
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Post-process tennis tracking logs into shots, bounces, and score.")
+    parser.add_argument(
+        "--bounce-source",
+        choices=["jsonl", "detector"],
+        default="jsonl",
+        help="Where bounces come from. 'jsonl' reads the events the tracker wrote "
+             "live. 'detector' re-derives them from the logged ball track with "
+             "bounce_detect.py, which finds far more of them (tennis11: 10 -> 44) "
+             "because it does not need consecutive frames around the bounce. "
+             "Default stays 'jsonl' so existing known-good analyses are unchanged.",
+    )
     parser.add_argument("--manifest", default="", help="Optional JSON manifest with analysis inputs and overrides.")
     parser.add_argument("--jsonl", default="", help="Input tracking JSONL from track_ball_yolo.py.")
     parser.add_argument("--output", default="", help="Output analysis JSON path.")
@@ -166,6 +203,7 @@ def apply_manifest(args, manifest_path):
         "initial_set_score": "initial_set_score",
         "recover_missed_bounce_candidates": "recover_missed_bounce_candidates",
         "missed_bounce_min_strength": "missed_bounce_min_strength",
+        "bounce_source": "bounce_source",
     }
     defaults = {
         "jsonl": "",
@@ -190,6 +228,7 @@ def apply_manifest(args, manifest_path):
         "initial_set_score": "0-0",
         "recover_missed_bounce_candidates": False,
         "missed_bounce_min_strength": 32.0,
+        "bounce_source": "jsonl",
     }
     for manifest_key, attr in field_map.items():
         if manifest_key not in manifest:
@@ -664,6 +703,12 @@ def classify_serve_attempt(bounce, server, receiver, attempt_number):
     elif world_point_in_receiver_service_box(world_point, receiver):
         result = "in"
         reason = "receiver_service_box"
+    elif side_for_world(world_point) == server:
+        # A serve crosses the net, so it cannot bounce on the server's own side.
+        # Reaching here means the real serve bounce was missed and this is a
+        # rally bounce; calling it a fault manufactures phantom double faults.
+        result = "not_a_serve"
+        reason = "bounce_on_server_side"
     else:
         result = "fault"
         reason = "outside_receiver_service_box"
@@ -703,7 +748,294 @@ def serve_state_result(
     return result
 
 
-def infer_serve_sequence(point_bounces, server, receiver, official_double_fault=False, official_first_serve_in=False):
+def bounce_after_serve_contact(point_bounces, contact_frame, used_bounce_ids, fps):
+    """The bounce a serve struck at `contact_frame` produced, if it was seen.
+
+    Searching forward from the strike is the whole point of detecting it: the
+    old code took the point's first bounces and hoped they were serves, which
+    is what let rally bounces be judged against the service box.
+    """
+    for bounce in point_bounces:
+        if bounce["frame"] <= contact_frame or bounce["id"] in used_bounce_ids:
+            continue
+        lag = bounce["frame"] - contact_frame
+        if lag > frame_window(MAX_SERVE_FLIGHT_SECONDS, fps):
+            return None
+        if lag < frame_window(MIN_SERVE_FLIGHT_SECONDS, fps):
+            # Too soon to be a landing: this is the strike itself showing up in
+            # the bounce stream as a trajectory reversal. Skip it and keep
+            # looking, rather than judging the serve on the racket.
+            continue
+        return bounce
+    return None
+
+
+def serve_can_be_followed_by_second(attempt, serve_motions, attempts_so_far):
+    """Does this attempt leave a second serve still to be played?
+
+    Returns (allowed, reason). The reason names the test that rejected the next
+    detected strike, so a rejection can be asserted rather than merely observed
+    as an absence.
+    """
+    if attempts_so_far >= len(serve_motions):
+        return False, "no_further_serve_motion_detected"
+    if attempt["result"] == "fault":
+        return True, None
+    if attempt["result"] != "unknown":
+        # The serve landed in, so the point is under way.
+        return False, "serve_landed_in"
+    # The strike was found but its landing never was, so the fault cannot be
+    # read off the bounce. Two independent things still have to agree before
+    # calling the next strike a second serve: it must have a tracked toss of
+    # its own, and the ball must not have come back over the net in between.
+    # A rally stroke played from behind the baseline satisfies neither.
+    following = serve_motions[attempts_so_far]
+    if following.get("source") != "ball_toss":
+        return False, "next_motion_has_no_tracked_toss"
+    rally_between = following.get("rally_between_serves")
+    if rally_between is None:
+        # Too little of the ball was tracked between the two strikes to say
+        # whether it came back over the net. That is an absence of evidence, not
+        # evidence of a rally, and saying so keeps the reason honest.
+        return False, "insufficient_ball_track_between_strikes"
+    if rally_between:
+        return False, "ball_returned_over_net_between_strikes"
+    return True, None
+
+
+def serve_attempt_from_motion(motion, bounce, server, receiver, attempt_number):
+    """A serve attempt built from a detected strike, with or without its bounce."""
+    if bounce is None:
+        return {
+            "attempt": attempt_number,
+            "bounce_id": None,
+            "bounce_frame": None,
+            "server": server,
+            "receiver": receiver,
+            "result": "unknown",
+            "reason": "serve_bounce_not_detected",
+            "service_box_side": None,
+            "world_point": None,
+            "contact_frame": motion["contact_frame"],
+            "contact_source": motion.get("source"),
+            "contact_confidence": motion.get("confidence"),
+        }
+    attempt = classify_serve_attempt(bounce, server, receiver, attempt_number)
+    attempt["contact_frame"] = motion["contact_frame"]
+    attempt["contact_source"] = motion.get("source")
+    attempt["contact_confidence"] = motion.get("confidence")
+    if attempt["result"] == "not_a_serve":
+        # The strike is no longer in doubt, so a bounce on the server's own side
+        # this soon after it is a mis-projected landing point rather than proof
+        # that no serve happened.
+        attempt["result"] = "unknown"
+        attempt["reason"] = "serve_bounce_projected_on_server_side"
+    return attempt
+
+
+def infer_serve_sequence_from_motions(
+    point_bounces,
+    serve_motions,
+    server,
+    receiver,
+    official_double_fault=False,
+    official_first_serve_in=False,
+    fps=FPS_DEFAULT,
+):
+    """Serve verdict for a point whose serve strikes were located directly."""
+    attempts = []
+    used_bounce_ids = set()
+    previous_contact_frame = None
+    rejection_reason = None
+    for motion in serve_motions:
+        contact_frame = motion["contact_frame"]
+        if previous_contact_frame is not None:
+            # Reaching here means the previous attempt faulted. A second serve
+            # follows a fault with nothing bouncing in between; an intervening
+            # bounce means a rally was under way, so this strike is a rally
+            # stroke played from behind the baseline. Those look identical to a
+            # serve in the player's own motion, so bounce evidence is the only
+            # thing that separates them.
+            intervening = [
+                bounce
+                for bounce in point_bounces
+                if previous_contact_frame < bounce["frame"] < contact_frame
+                and bounce["id"] not in used_bounce_ids
+                # The previous strike's own echo is not evidence of a rally. It
+                # sits within a frame or two of that strike, and counting it
+                # here would reject a real second serve outright.
+                and bounce["frame"] - previous_contact_frame
+                >= frame_window(MIN_SERVE_FLIGHT_SECONDS, fps)
+                # Only a rally-grade bounce is evidence of a rally. A server
+                # bouncing the ball at their feet before the second serve is a
+                # real bounce but not a return, and counting it here rejects the
+                # genuine second serve outright -- which is what happened to
+                # tennis11 P3 (f1636, near_player, low confidence) once bounces
+                # came from the detector rather than the sparser event stream.
+                # Absent on the legacy jsonl source, so that path is unchanged.
+                and bounce.get("rally_scoring_eligible", True)
+            ]
+            if intervening:
+                break
+        bounce = bounce_after_serve_contact(point_bounces, contact_frame, used_bounce_ids, fps)
+        if bounce is not None:
+            used_bounce_ids.add(bounce["id"])
+        attempt = serve_attempt_from_motion(motion, bounce, server, receiver, len(attempts) + 1)
+        attempts.append(attempt)
+        allowed, rejection_reason = serve_can_be_followed_by_second(
+            attempt, serve_motions, len(attempts)
+        )
+        if not allowed:
+            break
+        previous_contact_frame = contact_frame
+
+    # A second serve is only ever played because the one before it faulted. The
+    # tests in serve_can_be_followed_by_second are what earn that inference, so
+    # once a later attempt exists, an earlier attempt whose landing was never
+    # seen can be settled from the fact that the server served again.
+    for earlier in attempts[:-1]:
+        if earlier["result"] == "unknown":
+            earlier["result"] = "fault"
+            earlier["reason"] = "inferred_fault_second_serve_followed"
+
+    first_contact = attempts[0]["contact_frame"] if attempts else None
+    contact_frames = [attempt["contact_frame"] for attempt in attempts]
+    extra = {
+        "serve_contact_frame": first_contact,
+        "serve_contact_frames": contact_frames,
+        "serve_motion_source": serve_motions[0].get("source") if serve_motions else None,
+        "detected_serve_motions": len(serve_motions),
+        # Names the test that stopped a further detected strike from being
+        # promoted to a second serve, so the guard can be asserted directly.
+        "second_serve_rejected_reason": rejection_reason,
+    }
+
+    two_faults = len(attempts) >= 2 and all(attempt["result"] == "fault" for attempt in attempts[:2])
+    if official_double_fault:
+        reasons = ["official_double_fault_override"]
+        if not two_faults:
+            reasons.append(f"only_{len(attempts)}_serve_bounce_attempts_detected")
+        return serve_state_result(
+            "double_fault",
+            "double_fault",
+            receiver,
+            attempts,
+            "double_fault",
+            "high",
+            reasons,
+            official_override=True,
+            **extra,
+        )
+    if official_first_serve_in and attempts:
+        return serve_state_result(
+            "serve_in",
+            None,
+            None,
+            attempts[:1],
+            "first_serve_in",
+            "high",
+            ["official_first_serve_in_override"],
+            official_override=True,
+            **extra,
+        )
+    if not attempts:
+        return serve_state_result(
+            "unknown", None, None, [], "waiting_for_serve", "low",
+            ["no_serve_motion_detected"], **extra,
+        )
+    if two_faults:
+        return serve_state_result(
+            "double_fault",
+            "double_fault",
+            receiver,
+            attempts,
+            "double_fault",
+            "medium",
+            ["serve_struck_twice_both_landed_out"],
+            post_second_serve_bounces=max(0, len(point_bounces) - 2),
+            official_override=False,
+            **extra,
+        )
+    last = attempts[-1]
+    if last["result"] == "in":
+        state = "second_serve_in" if len(attempts) >= 2 else "first_serve_in"
+        return serve_state_result(
+            "second_serve_in" if len(attempts) >= 2 else "serve_in",
+            None, None, attempts, state, "high",
+            ["serve_struck_and_landed_in"], **extra,
+        )
+    if last["result"] == "fault":
+        return serve_state_result(
+            "first_serve_fault", None, None, attempts, "first_serve_fault", "medium",
+            ["serve_struck_and_landed_out"], **extra,
+        )
+    # The strike was located but its bounce never was, so the serve happened and
+    # the analyzer declines to judge where it landed. This is deliberately not a
+    # verdict: reporting the frame of a serve whose landing was never seen is
+    # more useful, and more honest, than judging whatever bounced next.
+    return serve_state_result(
+        "unknown",
+        None,
+        None,
+        attempts,
+        "serve_struck_bounce_unobserved",
+        "low",
+        [last["reason"]],
+        **extra,
+    )
+
+
+def infer_serve_sequence(
+    point_bounces,
+    server,
+    receiver,
+    official_double_fault=False,
+    official_first_serve_in=False,
+    serve_motions=None,
+    fps=FPS_DEFAULT,
+):
+    if serve_motions:
+        return infer_serve_sequence_from_motions(
+            point_bounces,
+            serve_motions,
+            server,
+            receiver,
+            official_double_fault=official_double_fault,
+            official_first_serve_in=official_first_serve_in,
+            fps=fps,
+        )
+    result = infer_serve_sequence_from_bounces(
+        point_bounces,
+        server,
+        receiver,
+        official_double_fault=official_double_fault,
+        official_first_serve_in=official_first_serve_in,
+    )
+    if serve_motions is not None:
+        # Detection ran for this point and found no serve, so this verdict came
+        # from the legacy path below. That is the dangerous case -- the analyzer
+        # looks like it has serve detection while falling back to the behaviour
+        # detection exists to replace -- so say so in the result rather than
+        # leave it to be inferred from a missing field.
+        result["serve_motion_fallback"] = "old_bounce_path"
+        result["detected_serve_motions"] = 0
+    return result
+
+
+def infer_serve_sequence_from_bounces(
+    point_bounces,
+    server,
+    receiver,
+    official_double_fault=False,
+    official_first_serve_in=False,
+):
+    """The original serve verdict: read the serve off the point's first bounces.
+
+    Kept for points where no serve strike was detected. It is a guess by
+    construction -- it cannot tell a serve bounce from a rally bounce -- so
+    callers should prefer infer_serve_sequence_from_motions wherever a strike
+    was actually found.
+    """
     if official_first_serve_in:
         skipped = []
         for bounce in point_bounces[:4]:
@@ -723,15 +1055,67 @@ def infer_serve_sequence(point_bounces, server, receiver, official_double_fault=
             skipped.append(bounce["id"])
 
     attempts = []
+    non_serve_bounce_ids = []
     for bounce in point_bounces[:2]:
         attempt = classify_serve_attempt(bounce, server, receiver, len(attempts) + 1)
+        if attempt["result"] == "not_a_serve" and not official_double_fault:
+            # This bounce is on the server's own side, so the serve that should
+            # have preceded it was never detected. Stop rather than counting rally
+            # bounces as serve attempts. When the caller has asserted a double
+            # fault we keep the attempt slots instead: the serve is known to have
+            # happened, and dropping the attempts would strip the serve labels
+            # (and the server attribution) off the point's shots.
+            non_serve_bounce_ids.append(attempt["bounce_id"])
+            break
         attempts.append(attempt)
         if attempt["result"] == "in":
             break
         if attempt["result"] == "unknown":
             break
 
+    two_fault_bounces = (
+        len(attempts) >= 2
+        and attempts[0]["result"] == "fault"
+        and attempts[1]["result"] == "fault"
+    )
+    if official_double_fault and not two_fault_bounces:
+        # The caller asserts a double fault the bounce detector did not see as
+        # two fault bounces. Far-side serve bounces are the ones most often
+        # missed, so an incomplete detection here is expected rather than a sign
+        # the override is wrong; treat the override as ground truth and record
+        # what the detector actually found.
+        reasons = [
+            "official_double_fault_override",
+            f"only_{len(attempts)}_serve_bounce_attempts_detected",
+        ]
+        if any(attempt["result"] == "in" for attempt in attempts):
+            reasons.append("detected_serve_in_conflicts_with_override")
+        return serve_state_result(
+            "double_fault",
+            "double_fault",
+            receiver,
+            attempts,
+            "double_fault",
+            "high",
+            reasons,
+            post_second_serve_bounces=max(0, len(point_bounces) - len(attempts)),
+            official_override=True,
+        )
     if not attempts:
+        if non_serve_bounce_ids:
+            # The point's first bounce is on the server's side of the net, so the
+            # serve itself was never seen. Report that instead of a serve verdict
+            # built from rally bounces.
+            return serve_state_result(
+                "unknown",
+                None,
+                None,
+                [],
+                "serve_unobserved",
+                "low",
+                ["first_bounce_on_server_side"],
+                non_serve_bounce_ids=non_serve_bounce_ids,
+            )
         return serve_state_result(
             "unknown",
             None,
@@ -741,7 +1125,7 @@ def infer_serve_sequence(point_bounces, server, receiver, official_double_fault=
             "low",
             ["no_live_bounces_for_point"],
         )
-    if len(attempts) >= 2 and attempts[0]["result"] == "fault" and attempts[1]["result"] == "fault":
+    if two_fault_bounces:
         post_second_serve_bounces = max(0, len(point_bounces) - 2)
         if official_double_fault or post_second_serve_bounces <= 1:
             confidence = "high" if official_double_fault else "medium"
@@ -860,7 +1244,12 @@ def terminal_ball_state(rows, point_range, inv_homography):
             moving_outward = True
             frame_out_direction = "bottom"
 
-    world_out = last_world is not None and not world_point_in_bounds(last_world, margin=2.0)
+    outside_court = last_world is not None and not world_point_in_bounds(last_world, margin=2.0)
+    # Distinguish "landed just out" from "still airborne when the track stopped".
+    projection_plausible = last_world is not None and world_point_in_bounds(
+        last_world, margin=OUT_PROJECTION_MAX_FT
+    )
+    world_out = outside_court and projection_plausible
     world_direction = None
     if last_world and first_world:
         dxw = last_world[0] - first_world[0]
@@ -875,7 +1264,32 @@ def terminal_ball_state(rows, point_range, inv_homography):
         elif yw > 78.0 and dyw > 0.5:
             world_direction = "near_long"
 
-    if world_out or (near_frame_edge and moving_outward) or missing_after_last >= 2:
+    # A ball hit into the net dies at the net line: the track stops there rather
+    # than continuing into either court. Check this before "out", because the
+    # symptom a net error shares with everything else is that the ball vanishes.
+    near_net = (
+        last_world is not None
+        and abs(last_world[1] - COURT_NET_Y_FT) <= NET_ERROR_MARGIN_FT
+        and 0.0 <= last_world[0] <= COURT_WIDTH_FT
+    )
+    stopped_here = missing_after_last >= 2 and not moving_outward
+    if near_net and stopped_here:
+        return {
+            "status": "net",
+            "reason": "terminal_ball_stopped_at_net",
+            "last_ball_frame": int(last["frame"]),
+            "missing_after_last": missing_after_last,
+            "last_center": last_center,
+            "last_world_point": [round(last_world[0], 2), round(last_world[1], 2)],
+            "confidence": "medium",
+        }
+
+    # NOTE: losing the ball track is NOT evidence the ball went out. It used to
+    # be treated as such (`missing_after_last >= 2` alone returned "out"), which
+    # made "out" the default verdict for every point whose tracking dropped --
+    # exactly what happens on a net error -- and left the net branch below
+    # unreachable. Only positive evidence of leaving the play area counts now.
+    if world_out or (near_frame_edge and moving_outward):
         return {
             "status": "out",
             "reason": "terminal_ball_left_play_area",
@@ -888,10 +1302,17 @@ def terminal_ball_state(rows, point_range, inv_homography):
             "frame_out_direction": frame_out_direction,
             "confidence": "medium" if world_out or moving_outward else "low",
         }
+    if outside_court and not projection_plausible:
+        reason = "terminal_ball_still_airborne"
+    elif missing_after_last >= 2:
+        reason = "ball_track_lost"
+    else:
+        reason = "terminal_ball_not_clearly_out"
     return {
         "status": "unknown",
-        "reason": "terminal_ball_not_clearly_out",
+        "reason": reason,
         "last_ball_frame": int(last["frame"]),
+        "missing_after_last": missing_after_last,
         "last_center": last_center,
         "last_world_point": [round(last_world[0], 2), round(last_world[1], 2)] if last_world else None,
     }
@@ -1005,7 +1426,62 @@ def pressure_from_previous_shot(previous_shot, previous_bounce):
     return {"forced": bool(reasons), "reasons": reasons or ["no_pressure_signal"]}
 
 
-def classify_point_end(serve_analysis, terminal_state, terminal_contact, point_links, shot_lookup, bounce_lookup):
+def find_double_bounce(point_bounces, shot_lookup):
+    """Two in-bounds bounces on one side with no shot from that side between them.
+
+    This is the most reliable point-end signal available, because it needs only
+    bounces that were already detected: the player on that side did not get the
+    ball back, so the opponent won. It is also the only thing that reads a
+    net-cord ball that drops in correctly - the ball lands short, bounces again,
+    and the classifier never has to reason about the net contact itself.
+    """
+    for first, second in zip(point_bounces, point_bounces[1:]):
+        # A double bounce is a rally verdict, so both halves must clear the
+        # conservative contract. Without this, a player dribbling the ball at
+        # their feet before serving reads as two same-side bounces with no shot
+        # between and hands the point to their opponent. (The flag is absent on
+        # the legacy jsonl bounce source, which has no such detections.)
+        if not all(b.get("rally_scoring_eligible", True) for b in (first, second)):
+            continue
+        first_world = first.get("world_point")
+        second_world = second.get("world_point")
+        if not first_world or not second_world:
+            continue
+        side = side_for_world(first_world)
+        if side != side_for_world(second_world):
+            continue
+        if not world_point_in_bounds(first_world, margin=2.0):
+            continue
+        # After bouncing, the ball keeps travelling away from the net. A second
+        # bounce closer to the net than the first means the ball was struck in
+        # between, or one of the two is not a real bounce.
+        toward_net = (
+            first_world[1] - second_world[1]
+            if side == "near"
+            else second_world[1] - first_world[1]
+        )
+        if toward_net > DOUBLE_BOUNCE_BACKWARD_TOLERANCE_FT:
+            continue
+        first_frame = int(first.get("frame") or 0)
+        second_frame = int(second.get("frame") or 0)
+        returned = any(
+            shot.get("player") == side and first_frame < int(shot.get("frame") or 0) < second_frame
+            for shot in shot_lookup.values()
+        )
+        if not returned:
+            return {"side": side, "first_frame": first_frame, "second_frame": second_frame}
+    return None
+
+
+def classify_point_end(
+    serve_analysis,
+    terminal_state,
+    terminal_contact,
+    point_links,
+    shot_lookup,
+    bounce_lookup,
+    point_bounces=(),
+):
     reasons = []
     review_flags = []
     serve_state = serve_analysis.get("state")
@@ -1019,6 +1495,33 @@ def classify_point_end(serve_analysis, terminal_state, terminal_contact, point_l
             "review_flags": review_flags,
             "inferred_winner": serve_analysis.get("inferred_winner"),
             "scoring_eligible": quality_at_least(serve_analysis.get("confidence"), "medium"),
+        }
+
+    double_bounce = find_double_bounce(point_bounces, shot_lookup)
+    if double_bounce:
+        loser = double_bounce["side"]
+        return {
+            "type": "double_bounce",
+            "confidence": "medium",
+            "reasons": reasons + ["two_bounces_same_side_no_return"],
+            "review_flags": review_flags,
+            "terminal_contact": terminal_contact,
+            "double_bounce": double_bounce,
+            "inferred_winner": side_opponent(loser),
+            "scoring_eligible": True,
+        }
+
+    if terminal_state.get("status") == "net":
+        hitter = terminal_contact.get("player")
+        confidence = min_quality(terminal_state.get("confidence") or "low", terminal_contact.get("quality") or "low")
+        return {
+            "type": "net_error",
+            "confidence": confidence,
+            "reasons": reasons + ["terminal_ball_stopped_at_net"],
+            "review_flags": review_flags + ([] if hitter else ["cannot_identify_final_hitter"]),
+            "terminal_contact": terminal_contact,
+            "inferred_winner": side_opponent(hitter) if hitter else None,
+            "scoring_eligible": bool(hitter) and quality_at_least(confidence, "medium"),
         }
 
     if terminal_state.get("status") == "out":
@@ -1272,30 +1775,79 @@ def build_analysis(rows, args):
     if point_ranges and winners and len(point_ranges) != len(winners):
         raise ValueError("--point-frames and --point-winners must have the same number of entries")
 
+    # Detect for both sides rather than for args.server alone: the server side
+    # changes with the end changes tracked further down, and each call site
+    # below asks with the side that is actually serving that point.
+    serve_motions_by_side = {
+        side: detect_serve_motions(by_frame, point_ranges, side, inv_homography, args.fps)
+        for side in ("near", "far")
+    }
+
+    def serve_motions_for(side, point_index):
+        # An empty list means the detector ran and found nothing, which is not
+        # the same as never having run: it sends the caller down the legacy
+        # bounce-first path with that fact recorded, rather than silently.
+        return serve_motions_by_side.get(side, {}).get(point_index) or []
+
     raw_bounces = []
-    for bounce_index, row in enumerate(
-        [row for row in rows if row.get("event") and row.get("event", {}).get("type") == "bounce"], start=1
-    ):
-        event = row.get("event")
-        if args.ignore_bounces_before_frame and int(event["frame"]) < args.ignore_bounces_before_frame:
-            continue
-        frame = int(event["frame"])
-        point_index = point_for_frame(point_ranges, frame) if point_ranges else None
-        raw_bounces.append(
-            {
+    if args.bounce_source == "detector":
+        # Re-derive bounces from the logged ball track. Every detection is
+        # admitted and carries its grade forward, rather than being filtered
+        # here: filtering on `serve_landing_precondition` dropped tennis11 P3's
+        # first-serve landing (f1511, graded low because the track is clumpy
+        # there) and left that serve with no bounce at all. The consumers are
+        # better placed to judge -- the rally logic below demands
+        # `rally_scoring_eligible`, while the serve path constrains by flight
+        # time and receiver-side geometry instead.
+        with open(args.court_calib_file, "r", encoding="utf-8") as handle:
+            calib_points = json.load(handle)["points"]
+        for detected in detect_bounces(rows, calib_points):
+            frame = int(detected["frame"])
+            if args.ignore_bounces_before_frame and frame < args.ignore_bounces_before_frame:
+                continue
+            raw_bounces.append({
                 "id": f"bounce_{len(raw_bounces) + 1:03d}",
                 "frame": frame,
-                "log_frame": int(row["frame"]),
-                "side": event.get("side"),
-                "pattern": event.get("pattern"),
-                "point": event.get("point"),
-                "world_point": event.get("world_point"),
-                "bounce_strength": event.get("bounce_strength"),
-                "point_index": point_index,
+                "log_frame": frame,
+                "side": detected["side"],
+                "pattern": None,
+                "point": detected["point"],
+                "world_point": detected["world_point"],
+                "bounce_strength": detected["dvy_ft"],
+                "point_index": point_for_frame(point_ranges, frame) if point_ranges else None,
                 "live": True,
                 "exclude_reason": None,
-            }
-        )
+                "detector_confidence": detected["confidence"],
+                "detector_shape_confidence": detected["shape_confidence"],
+                "near_player": detected["near_player"],
+                "rally_scoring_eligible": detected["rally_scoring_eligible"],
+                "serve_landing_precondition": detected["serve_landing_precondition"],
+                "provenance": detected["provenance"],
+            })
+    else:
+        for bounce_index, row in enumerate(
+            [row for row in rows if row.get("event") and row.get("event", {}).get("type") == "bounce"], start=1
+        ):
+            event = row.get("event")
+            if args.ignore_bounces_before_frame and int(event["frame"]) < args.ignore_bounces_before_frame:
+                continue
+            frame = int(event["frame"])
+            point_index = point_for_frame(point_ranges, frame) if point_ranges else None
+            raw_bounces.append(
+                {
+                    "id": f"bounce_{len(raw_bounces) + 1:03d}",
+                    "frame": frame,
+                    "log_frame": int(row["frame"]),
+                    "side": event.get("side"),
+                    "pattern": event.get("pattern"),
+                    "point": event.get("point"),
+                    "world_point": event.get("world_point"),
+                    "bounce_strength": event.get("bounce_strength"),
+                    "point_index": point_index,
+                    "live": True,
+                    "exclude_reason": None,
+                }
+            )
 
     shots = []
     links = []
@@ -1336,6 +1888,8 @@ def build_analysis(rows, args):
             args.receiver,
             official_double_fault=point_index in official_double_fault_points,
             official_first_serve_in=point_index in official_first_serve_in_points,
+            serve_motions=serve_motions_for(args.server, point_index),
+            fps=args.fps,
         )
         for attempt in serve_analysis_for_shots.get("attempts") or []:
             serve_attempts_by_bounce_id[attempt.get("bounce_id")] = attempt
@@ -1389,6 +1943,10 @@ def build_analysis(rows, args):
             "stroke_reason": stroke["reason"],
             "type": shot_type,
             "serve_attempt": serve_attempt_number,
+            # Filled in by the scoring loop for points whose serving side turns
+            # out not to be the one this tagging assumed. See
+            # shot_tagging_server_mismatch_points.
+            "review_reasons": [],
             "speed": speed,
             "quality": shot.get("quality"),
             "debug": {
@@ -1429,6 +1987,7 @@ def build_analysis(rows, args):
     bounce_lookup = {bounce["id"]: bounce for bounce in raw_bounces}
 
     points = []
+    shot_tagging_server_mismatch_points = []
     player_order = [args.server_player, args.receiver_player]
     point_score = {player: 0 for player in player_order}
     initial_games = parse_score_pair(args.initial_game_score, "--initial-game-score")
@@ -1455,6 +2014,34 @@ def build_analysis(rows, args):
         player_to_side = invert_mapping(side_to_player)
         current_server_side = player_to_side[current_server_player]
         current_receiver_side = player_to_side[current_receiver_player]
+        if current_server_side != args.server:
+            # Shot-level serve tagging is built further up, before point winners
+            # are known, so it has to assume the serving side stays as given on
+            # the command line. Once the ends or the service alternate that
+            # assumption is wrong, and the shot labels for this point come from
+            # a different server than its own serve_analysis. Fixing it properly
+            # means breaking a cycle (shot tags need serve attempts, serve
+            # attempts need the server, the server needs the score, the score
+            # needs the shots), so for now record the points where the two
+            # disagree instead of letting them disagree silently.
+            shot_tagging_server_mismatch_points.append(index)
+            # A summary breadcrumb is not enough on its own: exports read the
+            # shot and link records, so the records that were built from the
+            # wrong serving side have to carry the warning themselves. The
+            # serve-derived fields are the untrustworthy ones -- the shot's
+            # player is overridden by the serve attempt, and type/serve_attempt
+            # are derived from it.
+            for link in (link for link in links if link["point_index"] == index):
+                shot_record = shot_lookup.get(link["shot_id"])
+                if shot_record is not None and shot_record.get("serve_attempt") is not None:
+                    shot_record["review_reasons"] = sorted(
+                        set(shot_record.get("review_reasons") or [])
+                        | {"server_side_mismatch_untrusted_serve_tag"}
+                    )
+                    link["review_reasons"] = sorted(
+                        set(link.get("review_reasons") or [])
+                        | {"server_side_mismatch_untrusted_serve_tag"}
+                    )
         tiebreak_before = is_tiebreak_game(game_score)
         point_score_before = format_score(
             point_score,
@@ -1473,6 +2060,8 @@ def build_analysis(rows, args):
             current_receiver_side,
             official_double_fault=index in official_double_fault_points,
             official_first_serve_in=index in official_first_serve_in_points,
+            serve_motions=serve_motions_for(current_server_side, index),
+            fps=args.fps,
         )
         terminal_state = terminal_ball_state(rows, point_range, inv_homography)
         last_bounce_frame = max([bounce["frame"] for bounce in point_bounces], default=point_range["start_frame"])
@@ -1490,6 +2079,7 @@ def build_analysis(rows, args):
             point_links,
             shot_lookup,
             bounce_lookup,
+            point_bounces=point_bounces,
         )
         point_end_reason = serve_analysis.get("point_end_reason")
         if point_end_reason is None:
@@ -1497,6 +2087,8 @@ def build_analysis(rows, args):
                 point_end_reason = "out"
             elif point_end_analysis.get("type") == "net_error":
                 point_end_reason = "net"
+            elif point_end_analysis.get("type") == "double_bounce":
+                point_end_reason = "double_bounce"
             elif terminal_state.get("status") == "out":
                 point_end_reason = "out"
         manual_winner = winners[index - 1] if winners else None
@@ -1660,6 +2252,7 @@ def build_analysis(rows, args):
             "final_set_score": format_ordered_score(set_score, player_order),
             "completed_games": len(games),
             "missed_bounce_candidates": len(missed_bounce_candidates),
+            "shot_tagging_server_mismatch_points": shot_tagging_server_mismatch_points,
         },
         "points": points,
         "games": games,

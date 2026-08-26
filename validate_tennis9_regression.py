@@ -7,22 +7,26 @@ import sys
 
 EXPECTED_POINTS = [
     {
+        # Re-baselined 2026-08. This point's first detected bounce is at world
+        # y=19.1, on the FAR player's own side, and far is the server - so it
+        # cannot be that serve, and the serve bounce was simply missed. The
+        # analyzer used to judge that rally bounce as a serve attempt, which is
+        # what produced the old "played_out_after_geometric_fault" state (the
+        # geometry said double fault while the players carried on). It now
+        # reports serve_unobserved, and declines to call the point end rather
+        # than defaulting to "out" when the ball track is lost.
         "index": 1,
-        "serve_state": "played_out_after_geometric_fault",
+        "serve_state": "serve_unobserved",
         "serve_confidence": "low",
-        "point_end_reason": "out",
-        "point_end_type": "unforced_error_out",
+        "point_end_reason": None,
+        "point_end_type": "unknown_end",
         "point_end_confidence": "low",
         "winner": "near",
-        "winner_source": "manual_low_confidence_auto_fallback",
+        "winner_source": "manual",
         "score_after": "0-15",
         "game_score_after": "0-0",
         "set_score_after": "0-0",
-        "review_flags": {
-            "serve_geometry_disagrees_with_play_continuation",
-            "low_confidence_terminal_out",
-            "final_ball_out_of_frame",
-        },
+        "review_flags": {"unknown_point_end"},
     },
     {
         "index": 2,
@@ -81,8 +85,12 @@ REQUIRED_AUDIT_COLUMNS = {
 EXPECTED_MISSED_BOUNCE_CANDIDATES = []
 
 EXPECTED_SHOT_TYPES = {
-    "shot_001": {"type": "first_serve", "player": "far", "serve_attempt": 1},
-    "shot_002": {"type": "second_serve", "player": "far", "serve_attempt": 2},
+    # Point 1's serve was never detected (see EXPECTED_POINTS[0]), so its opening
+    # shots are no longer labelled as serves. The old shot_001 "first serve by
+    # far" was right about the player only because it inherited the server from a
+    # serve attempt built out of a mid-rally bounce.
+    "shot_001": {"type": "groundstroke", "player": "near", "serve_attempt": None},
+    "shot_002": {"type": "groundstroke", "player": "far", "serve_attempt": None},
     "shot_012": {"type": "first_serve", "player": "far", "serve_attempt": 1},
     "shot_013": {"type": "return", "player": "near", "serve_attempt": None},
     "shot_018": {"type": "first_serve", "player": "far", "serve_attempt": 1},

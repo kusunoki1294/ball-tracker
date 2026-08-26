@@ -128,6 +128,11 @@ def main():
         serve_analysis = point.get("serve_analysis") or {}
         attempts = serve_analysis.get("attempts") or []
         for attempt in attempts:
+            # A serve can be located without its landing ever being seen (the
+            # bounce falls in a gap in the ball track), in which case there is no
+            # frame to hang a label on. Skip rather than crash the render.
+            if attempt.get("bounce_frame") is None:
+                continue
             frame = int(attempt["bounce_frame"])
             label = None
             if serve_analysis.get("status") == "double_fault" and attempt.get("attempt") == 2:

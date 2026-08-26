@@ -1,0 +1,75 @@
+{
+  "jsonl": "yoloVids/outputs/tennis11/ai11.1.jsonl",
+  "output": "yoloVids/outputs/tennis11/ai11.2.analysis.json",
+  "court_calib_file": "yoloVids/calibration/court_calib_tennis11.json",
+  "fps": 30.0,
+  "point_frames": [
+    {
+      "start_frame": 1,
+      "end_frame": 445
+    },
+    {
+      "start_frame": 446,
+      "end_frame": 1353
+    },
+    {
+      "start_frame": 1354,
+      "end_frame": 1796
+    },
+    {
+      "start_frame": 1797,
+      "end_frame": 2367
+    },
+    {
+      "start_frame": 2368,
+      "end_frame": 2632
+    },
+    {
+      "start_frame": 2633,
+      "end_frame": 3210
+    }
+  ],
+  "point_winners": [
+    "far",
+    "near",
+    "far",
+    "near",
+    "near",
+    "near"
+  ],
+  "server": "near",
+  "receiver": "far",
+  "server_player": "S",
+  "receiver_player": "K",
+  "near_handedness": "right",
+  "far_handedness": "right",
+  "auto_score": false,
+  "official_double_fault_points": [
+    3
+  ],
+  "initial_game_score": "0-0",
+  "initial_set_score": "0-0",
+  "recover_missed_bounce_candidates": true,
+  "missed_bounce_min_strength": 32.0,
+  "audit": {
+    "csv": "yoloVids/outputs/tennis11/ai11.2.audit.csv",
+    "summary_json": "yoloVids/outputs/tennis11/ai11.2.audit.summary.json",
+    "court_map": "yoloVids/outputs/tennis11/ai11.2.court_map.png",
+    "point_debug_dir": "yoloVids/outputs/tennis11/point_debug"
+  },
+  "report": {
+    "title": "Tennis11 Game 1 - S serving vs K",
+    "output": "yoloVids/outputs/tennis11/match_report.html",
+    "data_json": "yoloVids/outputs/tennis11/match_report_data.json",
+    "point_debug_dir": "yoloVids/outputs/tennis11/point_debug"
+  },
+  "renders": [
+    {
+      "name": "red_marks",
+      "video": "yoloVids/outputs/tennis11/ai11.1.avi",
+      "analysis": "yoloVids/outputs/tennis11/ai11.2.analysis.json",
+      "output": "yoloVids/outputs/tennis11/ai11.2.avi"
+    }
+  ],
+  "bounce_source": "detector"
+}

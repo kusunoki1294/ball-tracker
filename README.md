@@ -21,7 +21,21 @@ Current status
   - bounce detection
   - far-side bounce detection
   - separating true bounces from player or racket contact points
-- Current known-good analysis target:
+- Second worked example (2026-08): tennis11 game 1
+  - manifest: `manifests/tennis11_game1_manifest.json`
+  - input slice: `yoloVids/inputs/tennis11_game1.mp4` (source 40s-151s of a full
+    6-2 set; game 1 runs from the first serve at ~41s to ~2:30)
+  - calibration: `yoloVids/calibration/court_calib_tennis11.json` (automatic,
+    line-model fit, 0.4px)
+  - tracking: `yoloVids/outputs/tennis11/ai11.1.{avi,jsonl}`
+  - annotated render: `yoloVids/outputs/tennis11/tennis11_game1_annotated.mp4`
+  - Scoring reproduces the real game exactly (0-15, 15-15, 15-30, 30-30, 40-30,
+    game) from manual `point_winners`. Serve state and point ends are NOT
+    reliable here: only 10 bounces were detected across 6 points, so points 2
+    and 4 are misclassified as double faults from mid-rally bounces. See
+    "Bounce recall is the bottleneck" below.
+
+Current known-good analysis target:
   - manifest: `manifests/tennis9_analysis_manifest.json`
   - analysis JSON: `yoloVids/outputs/tennis9/play_segments/ai9.5.analysis.json`
   - red-mark render: `yoloVids/outputs/tennis9/play_segments/ai9.5.avi`
@@ -76,12 +90,35 @@ across videos.
      in the air projects through the ground homography to a world point outside
      the court (measured world y down to -103, well past the far baseline), so
      the court filter rejects it.
-   - Recommended architecture (not yet implemented): do NOT gate in-flight ball
-     candidates on the court bounds (keep recall high, as the guardrail already
-     does when no calibration is present), and use the accurate calibration only
-     for its real purpose - bounce localization, mini court, side classification,
-     and scoring. Decoupling those two uses in `track_ball_yolo.py` is the next
-     step.
+   - Fixed (2026-08): `--no-ball-court-filter` decouples the two uses. Ball
+     candidates are no longer gated on the court bounds (recall stays high, as
+     the guardrail already does when no calibration is present) while the
+     calibration still drives bounce localization, the mini court, side
+     classification, and scoring. Use it whenever you pass a calibration.
+   - Confirmed on tennis11 over the same 350 rally frames, with an accurate
+     calibration supplied either way: 73.1% ball recall with the court filter,
+     82.9% without it. The filter discarded 219 real candidates in those frames.
+
+4. Calibration accuracy: CourtNet alone is an initialization, not a calibration
+   - On tennis11 the raw CourtNet corners were ~8px off on the interior lines and
+     ~25px off on the far baseline, which is metres of world error at the far end
+     - exactly where bounce in/out calls matter.
+   - Snapping only the four outer edges to the nearest bright line made it WORSE
+     (27px out on the far service line). The far baseline is short and faint with
+     the net tape and the court/apron edge running parallel to it, so a snapped
+     edge slides onto a neighbour and still looks self-consistent.
+   - `court_ai/fit_lines.py` fits the WHOLE court line model instead (baselines,
+     doubles and singles sidelines, both service lines, centre service line).
+     No wrong homography can light all of those up at once. Mean offset went
+     0.4px, verified against two features the objective never sees: the projected
+     net-post bases and the baseline centre marks both land on the real ones.
+   - This runs by default in `court_ai/infer.py` (disable with `--no-refine`).
+
+5. Cameras that crop the near doubles corners
+   - A correct calibration can place the near corners outside the frame (tennis11:
+     x=-69 and x=2185 on a 1920-wide frame). `calibration_fits_frame`'s ±24px
+     default rejected that correct calibration, so `--court-calib-margin-px` now
+     sets the tolerance. `court_ai/infer.py` prints the exact value needed.
 
 Files
 - `track_ball.py`: original tracker with HSV/motion and optional YOLO support
@@ -218,6 +255,14 @@ What was added to `track_ball_yolo.py`
 Important YOLO-only options
 Main detection options
 - `--court-calib-file`: calibration file for side-aware bounce rules
+- `--no-ball-court-filter`: do not reject ball candidates that project outside
+  the court. Recommended whenever a calibration is supplied: an in-flight ball
+  projects through the ground homography to a world point past the baselines, so
+  the court filter drops real detections. The calibration is still used for
+  bounces, the mini court, side classification, and scoring.
+- `--court-calib-margin-px`: how far outside the frame a calibration point may
+  fall before the calibration is rejected (default 24). Cameras that crop the
+  near doubles corners need a larger value; `court_ai/infer.py` prints it.
 - `--ball-model`: ball detector path
 - `--scene-model`: scene detector path
 - `--ball-conf`: confidence threshold for the ball detector
@@ -283,24 +328,149 @@ YOLO-only tracker
 - The physical jump gate affects future `track_ball_yolo.py` runs. Existing renders based on an old JSONL need the tracking log regenerated before they benefit from it.
 
 Latest tennis9 analysis notes
-- Point 1 is flagged as `played_out_after_geometric_fault` because geometry says double fault but the players continued.
+- Point 1 is flagged as `serve_unobserved`: its serve bounce was never detected, so the first bounce on record is a mid-rally one on the server's own side. (It used to read `played_out_after_geometric_fault` - geometry said double fault while the players continued - which was the same miss seen from the other end.)
 - Points 3 and 4 are official double faults from the manifest override.
 - Scoring for tennis9 validates as `0-15`, `0-30`, `0-40`, then game score `0-1`.
 - `validate_tennis9_regression.py` checks the known-good serve states, point endings, scoring, audit columns, and point debug images.
 
+Offline bounce detection (2026-08): `bounce_detect.py`
+The bottleneck described below is addressed by detecting bounces AFTER tracking,
+from the logged JSONL, instead of live inside the tracker.
+
+Why offline helps: the in-tracker EventDetector needs a window of CONSECUTIVE
+frames around the bounce, but the bounce is the hardest instant to track - the
+ball is fastest, blurriest and lowest-contrast against the court - so the frames
+it needs are exactly the ones missing. Working from the whole logged trajectory,
+a bounce is found by fitting the ballistic arc either side of a candidate instant
+and measuring the discontinuity, which tolerates dropped frames.
+
+    python bounce_detect.py --jsonl <tracking.jsonl> --court-calib-file <calib.json>
+    python eval_bounce_detect.py --verbose [--review-csv out.csv]
+
+Measured: tennis11 game 1 goes from 10 bounces to 44, serve bounces from 2/7 to
+6/7, and point 5 from zero bounces to one. tennis9 recall is 20/23 against its
+reviewed known-good set.
+
+Two things it deliberately does NOT do:
+- It does not reject racket contacts. In image space they are not reliably
+  separable from bounces; three attempts were measured and all failed (a velocity
+  threshold tuned on tennis9 inverted on tennis11 because which end serves decides
+  whether a struck ball travels toward or away from camera; ball-size trend
+  separated 16/23 from 7/16; striker distance overlaps because players stand where
+  balls land). Contacts are FLAGGED via `near_player` and graded, never dropped.
+- It does not claim precision. Recall is measured; precision needs the
+  `--review-csv` output hand-labelled, which has not been done. Several
+  "extra" detections are verified real bounces the old detector missed - mostly
+  players dribbling the ball before serving.
+
+Two caller contracts, because the consumers need different things:
+- `rally_scoring_eligible` - conservative, excludes anything near a player.
+- `serve_landing_precondition` - permissive, allows a receiver-side bounce near
+  the waiting receiver, since that is where serves land. It is a precondition,
+  not a verdict: it filters almost nothing alone and must be combined with
+  contact anchoring and receiver-side geometry.
+
+Lesson worth keeping: five separate thresholds in this module were found to be
+silently discarding real bounces, and every one of them was expressed in absolute
+pixels. Bounce events scale with ball speed and court depth, so thresholds are
+normalised to feet or to frames of ball travel. The one absolute pixel gate that
+remains (`max_residual_px`) is kept only because an audit showed it costs no
+known-good event. Likewise, two bugs came from trusting the GROUND projection for
+an airborne ball - it is wrong by construction there, and must not be used to
+choose which player to measure reach against, nor to reject a candidate outright.
+
+`eval_bounce_detect.py` also reports an ANCHORING HAZARD: detections closer to a
+serve strike than the minimum flight time. Those are the strike itself, and a
+consumer that takes the first bounce after a strike will judge the serve on it.
+That check found a live instance in the serve path.
+
+Bounce recall is the bottleneck for full automation
+- Everything above the bounce layer now works: calibration is automatic and
+  accurate to sub-pixel, ball/player tracking generalizes, point segmentation
+  exists (`cut_play_segments.py`), and the serve/point-end/scoring state machines
+  are in place. The one thing holding back "no human input of point winners" is
+  that not enough bounces are detected.
+- Measured on tennis11 game 1: 10 bounces over 6 points. Consequences observed:
+  - The serve state machine treats the first *detected* bounce of a point as the
+    serve. When the real serve bounce is missed, a mid-rally bounce takes its
+    place and the point is misread. Points 2 and 4 were called double faults
+    from bounces on the SERVER'S OWN side of the net - geometrically impossible
+    for that server's serve.
+  - Point 5 produced no bounces at all, so it is invisible to
+    `cut_play_segments.py` (it found 5 segments for 6 points) and its serve state
+    is `waiting_for_serve`.
+  - The trajectory-based recovery layer found only 1 candidate, so the gaps are
+    in the ball track itself, not just in the bounce test.
+Point-classification fixes (2026-08)
+These do not add bounces; they stop the classifier from inventing verdicts when
+the bounces are missing. On tennis11 game 1 automatic winner inference went from
+2 correct / 4 wrong to 2 correct / 0 wrong / 4 abstained.
+- Physical invariant: a serve crosses the net, so it cannot bounce on the
+  server's own side. Such a bounce now yields `not_a_serve`, and a point whose
+  first bounce is on the server's side reports `serve_unobserved` instead of
+  manufacturing faults. This is what produced the phantom double faults on
+  tennis11 points 2 and 4.
+- Losing the ball track is no longer evidence the ball went out.
+  `terminal_ball_state` used to return "out" whenever the ball was missing for 2+
+  frames before the point's end frame, which made "out" the default verdict for
+  any point whose tracking dropped - and left the net-error branch below it
+  unreachable. Only positive evidence (a plausible out projection, or the ball
+  moving out of frame) counts now; otherwise the status is `ball_track_lost`.
+- New `net` terminal status: a ball hit into the net dies at the net line, so a
+  track that stops within `NET_ERROR_MARGIN_FT` of the net now reads as a net
+  error rather than "out".
+- A wildly out-of-court projection is treated as "still airborne", not "landed
+  out" (`OUT_PROJECTION_MAX_FT`). A ball in the air projects through the ground
+  homography far past the baselines; tennis11 point 5 was being called out from a
+  ball projecting 16ft beyond the far baseline while still in flight.
+- New `double_bounce` point end: two in-bounds bounces on the same side with no
+  shot from that side between them means the player did not get it back. This is
+  the most reliable end signal available because it needs only bounces already
+  detected, and it is what correctly resolves a net-cord ball that drops in
+  (tennis11 point 1: the return clips the net, lands 3.8ft past it, bounces
+  again, K wins). Consecutive bounces must progress away from the net, which
+  rejects false pairs.
+- `official_double_fault_points` now applies even when fewer than two fault
+  bounces were detected. Previously the override could only confirm a double
+  fault the detector had already found, which is the case where it is least
+  needed; tennis11 point 3 is a real double fault with only one detected bounce.
+  The override also keeps its serve attempt slots so the point's shots retain
+  their serve labels and server attribution.
+
+`validate_tennis9_regression.py` was re-baselined for tennis9 point 1, which the
+serve-side invariant reclassifies from `played_out_after_geometric_fault` to
+`serve_unobserved` (point end `unforced_error_out` -> `unknown_end`). That
+point's first bounce is at world y=19.1 on the FAR player's own side while far is
+the server, so it cannot be that serve - the new labels are the more accurate
+diagnosis, and it is the point the notes below already flag as "geometry says
+double fault but the players continued". The cost is that shot_001 loses a
+`first_serve` label whose `player=far` attribution was right for the wrong
+reason. Points 2-4 were unaffected. The regression passes again.
+
 Immediate next step
-- Decouple ball-candidate court filtering from the court calibration in
-  `track_ball_yolo.py`: keep in-flight ball tracking un-gated (max recall, as the
-  guardrail already does with no calib), and use the (now automatic, accurate)
-  calibration only for bounce localization, the mini court, side classification,
-  and scoring. This is the fix that gives BOTH high recall and accurate bounces.
-- Then wire `court_ai/infer.py` into the tennis10 workflow: generate
+- Raise bounce recall (see above). That is now the single highest-value change:
+  scoring, serve state, point ends, and automatic point segmentation all sit
+  downstream of it.
+- Wire `court_ai/infer.py` into the tennis10 workflow: generate
   `court_calib_tennis10_model.json`, build a tennis10 manifest with point_frames
-  and winners, and run the analysis pipeline end to end as a second known-good.
+  and winners, and run the analysis pipeline end to end as a third known-good.
 - Older tennis9 track: the JSONL was already regenerated with the physical jump
   gate; review any remaining visible ball jumps against
   `ball_debug.selector.rejected_candidates` and only promote missed-bounce
   candidates after visual review confirms they are true court bounces.
+
+Speed
+- The tracker runs three YOLO passes per frame (ball at `--imgsz`, the far-court
+  ball ROI at `--far-ball-imgsz` 1600, and the scene model), and torch does not
+  saturate the CPU cores by default. On the dev Mac it sat at ~160% CPU.
+- Setting the OpenMP thread count makes it 2.2x faster (2.55 -> 1.17 s/frame,
+  measured over 40 frames of 1080p):
+
+  OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 VECLIB_MAXIMUM_THREADS=8 .venv/bin/python track_ball_yolo.py ...
+
+- Budget roughly 1 minute per 50 frames: a 2-minute 30fps clip is about 70
+  minutes, a 28-minute video about 11 hours. Do not lower `--far-ball-imgsz` to
+  save time; that pass is what finds the small far-court ball.
 
 Environment issues encountered
 - Ultralytics `track()` pulled in a missing `lap` dependency, so the YOLO-only script uses a custom simple tracker instead.
@@ -346,8 +516,8 @@ Current takeaway
   accurate calibrations on real courts without any hand clicking.
 - Known tradeoff: an accurate calibration lowers RAW ball recall because the
   court filter rejects in-flight balls. The fix is to decouple ball-candidate
-  filtering from the calibration (see Immediate next step) so calibration is used
-  only for bounce/mini-court/scoring.
+  filtering from the calibration; use `--no-ball-court-filter` so the calibration
+  is used only for bounce/mini-court/scoring.
 - Bounce marking and missed-bounce recovery are still experimental and should not
   be treated as scoring truth without review. Hit detection is intentionally
   disabled while bounce quality is improved.
