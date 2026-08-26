@@ -2117,6 +2117,24 @@ def parse_args():
         action="store_true",
         help="Only draw the tennis ball and the two players.",
     )
+    parser.add_argument(
+        "--no-ball-court-filter",
+        dest="ball_court_filter",
+        action="store_false",
+        help="Do not reject ball candidates that project outside the court. A ball in the "
+             "air projects through the ground homography to a world point well past the "
+             "baselines, so the court filter drops real in-flight detections. Use this to "
+             "keep ball recall high while still using the calibration for bounces, side "
+             "classification, and the mini court.",
+    )
+    parser.add_argument(
+        "--court-calib-margin-px",
+        type=int,
+        default=24,
+        help="How far outside the frame a calibration point may fall before the "
+             "calibration is rejected. Cameras that crop the near doubles corners need a "
+             "larger value than the default.",
+    )
     parser.add_argument("--headless", action="store_true", help="Disable the preview window.")
     parser.add_argument(
         "--max-frames",
@@ -2412,7 +2430,9 @@ def main():
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
 
     court_calib = load_court_calibration(args.court_calib_file)
-    if court_calib is not None and not calibration_fits_frame(court_calib, (height, width, 3)):
+    if court_calib is not None and not calibration_fits_frame(
+        court_calib, (height, width, 3), margin_px=args.court_calib_margin_px
+    ):
         print(
             f"Warning: ignoring court calibration {args.court_calib_file} because it does not fit "
             f"the video frame {width}x{height}."
@@ -2538,7 +2558,11 @@ def main():
             )
         else:
             contact_filtered_ball_candidates = deduped_ball_candidates
-        court_ball_candidates = filter_ball_candidates_by_court(contact_filtered_ball_candidates, inv_court_homography)
+        court_ball_candidates = (
+            filter_ball_candidates_by_court(contact_filtered_ball_candidates, inv_court_homography)
+            if args.ball_court_filter
+            else contact_filtered_ball_candidates
+        )
         tracked_ball_detections = ball_tracker.update(court_ball_candidates)
         stationary_ball_detections = ball_filter.filter(tracked_ball_detections)
         moving_ball_detections = moving_ball_filter.filter(stationary_ball_detections)
