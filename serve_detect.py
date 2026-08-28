@@ -368,11 +368,19 @@ def detect_serve_motions_for_point(by_frame, start_frame, end_frame, server, inv
     motions = []
     for apex in _toss_apexes(by_frame, track, server, inv_homography, fps):
         apex_frame = apex["apex_frame"]
+        # Search the full reach window even where it runs past the caller's
+        # window. Clipping it does not drop the strike, it MOVES it: the contact
+        # is the highest the box top gets, so a truncated search reports the
+        # edge, or the toss apex, with the same confidence as a real contact.
+        # Measured on tennis11 point 1 (true contact 159) -- a window ending at
+        # 158 reported 158, one ending at 155 reported 151, the apex. The frames
+        # are in by_frame either way, so read them and let the caller decide
+        # what to do with a strike that lands past its boundary.
         contact_frame, contact_top = _peak_reach(
             by_frame,
             server,
             apex_frame,
-            min(end_frame, apex_frame + frame_window(REACH_SEARCH_SECONDS, fps)),
+            apex_frame + frame_window(REACH_SEARCH_SECONDS, fps),
         )
         if contact_frame is None:
             continue
@@ -383,6 +391,14 @@ def detect_serve_motions_for_point(by_frame, start_frame, end_frame, server, inv
         motion["reasons"] = ["toss_above_head_behind_baseline", "contact_at_peak_reach"]
         prominence = _reach_prominence(by_frame, server, contact_frame, contact_top, fps)
         motion["reach_prominence_px"] = round(prominence, 1) if prominence is not None else None
+        # The strike is the highest the box top gets, so a search cut short by
+        # the end of the window reports the edge rather than the peak -- a wrong
+        # contact frame carrying the same confidence as a right one. Callers
+        # scanning arbitrary or overlapping windows cannot see that from the
+        # result, so say it here. Measured on tennis11 point 1 (true contact
+        # 159): a window ending at 158 reports 158, one ending at 155 reports
+        # 151, which is the toss apex rather than the strike.
+        motion["contact_outside_window"] = contact_frame > end_frame
         motions.append(motion)
 
     motions = _dedupe(motions, fps)

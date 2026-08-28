@@ -3,11 +3,8 @@ import json
 import os
 
 from analyze_tennis_events import (
-    COURT_NET_Y_FT,
     FPS_DEFAULT,
-    MAX_SERVE_FLIGHT_SECONDS,
-    MIN_SERVE_FLIGHT_SECONDS,
-    NET_LINE_CONTACT_BAND_FT,
+    bounce_after_serve_contact,
     parse_point_ranges,
     read_tracking_log,
     side_opponent,
@@ -16,6 +13,8 @@ from analyze_tennis_events import (
 from bounce_detect import detect_bounces
 from serve_detect import (
     MAX_SECOND_SERVE_GAP_SECONDS,
+    RALLY_BALL_RETURN_FRACTION,
+    REACH_SEARCH_SECONDS,
     ball_return_fraction,
     detect_serve_motions_for_point,
     frame_window,
@@ -146,21 +145,29 @@ def collect_serve_motions(
     motions = []
 
     def scan_window(start_frame, end_frame, source_window, span_index=None):
+        detection_end_frame = min(
+            last_frame,
+            end_frame + frame_window(REACH_SEARCH_SECONDS, fps),
+        )
         for side in ("near", "far"):
             for motion in detect_serve_motions_for_point(
                 by_frame,
                 start_frame,
-                end_frame,
+                detection_end_frame,
                 side,
                 inv_homography,
                 fps,
             ):
+                contact_frame = int(motion["contact_frame"])
+                if contact_frame < start_frame or contact_frame > end_frame:
+                    continue
                 item = dict(motion)
                 item["server"] = side
                 item["receiver"] = side_opponent(side)
                 item["activity_span_index"] = span_index
                 item["window_start_frame"] = start_frame
                 item["window_end_frame"] = end_frame
+                item["detection_window_end_frame"] = detection_end_frame
                 item["timeline_window_source"] = source_window
                 motions.append(item)
 
@@ -184,7 +191,7 @@ def collect_serve_motions(
 def motion_rank(motion):
     source_score = {"ball_toss": 2, "peak_reach": 1}.get(motion.get("source"), 0)
     confidence_score = {"high": 3, "medium": 2, "low": 1}.get(motion.get("confidence"), 0)
-    return (confidence_score, source_score, -int(motion["contact_frame"]))
+    return (confidence_score, source_score, int(motion["contact_frame"]))
 
 
 def dedupe_motions(motions, fps):
@@ -214,19 +221,10 @@ def detector_bounces(rows, court_calib_file):
 
 
 def serve_landing_after_contact(bounces, contact_frame, server, fps):
-    skipped_net_line = []
-    for bounce in bounces:
+    bounce, skipped_net_line_ids = bounce_after_serve_contact(bounces, contact_frame, set(), fps)
+    if bounce:
         lag = int(bounce["frame"]) - int(contact_frame)
-        if lag <= 0:
-            continue
-        if lag > frame_window(MAX_SERVE_FLIGHT_SECONDS, fps):
-            break
-        if lag < frame_window(MIN_SERVE_FLIGHT_SECONDS, fps):
-            continue
         world_point = bounce.get("world_point")
-        if world_point and abs(float(world_point[1]) - COURT_NET_Y_FT) <= NET_LINE_CONTACT_BAND_FT:
-            skipped_net_line.append(bounce)
-            continue
         receiver = side_opponent(server)
         result = "unknown"
         reason = "serve_bounce_not_adjudicable"
@@ -243,9 +241,9 @@ def serve_landing_after_contact(bounces, contact_frame, server, fps):
             "result": result,
             "reason": reason,
             "lag_frames": lag,
-            "skipped_net_line_bounce_ids": [item["id"] for item in skipped_net_line],
+            "skipped_net_line_bounce_ids": skipped_net_line_ids,
         }
-    if skipped_net_line:
+    if skipped_net_line_ids:
         return {
             "bounce_id": None,
             "bounce_frame": None,
@@ -253,7 +251,7 @@ def serve_landing_after_contact(bounces, contact_frame, server, fps):
             "result": "unknown",
             "reason": "serve_bounce_net_line_contact",
             "lag_frames": None,
-            "skipped_net_line_bounce_ids": [item["id"] for item in skipped_net_line],
+            "skipped_net_line_bounce_ids": skipped_net_line_ids,
         }
     return {
         "bounce_id": None,
@@ -321,12 +319,7 @@ def confidence_for_point(attempts, isolation, fragmentation):
     if len(attempts) == 2:
         reasons.append("second_serve_grouped_after_fault_or_unknown")
     score = max(0.0, min(1.0, score))
-    if score >= 0.75:
-        label = "high"
-    elif score >= 0.55:
-        label = "medium"
-    else:
-        label = "low"
+    label = "high" if score >= 0.75 else "uncertain"
     return round(score, 3), label, reasons
 
 
@@ -393,13 +386,29 @@ def build_hypotheses(
                 inv_homography,
                 fps,
             )
-            rally_between = None if fraction is None else fraction >= 0.35
+            second_serve_evidence = {
+                "gap_frames": gap,
+                "ball_return_fraction": round(fraction, 3) if fraction is not None else None,
+                "ball_tracked_frames": tracked,
+                "rally_return_fraction_threshold": RALLY_BALL_RETURN_FRACTION,
+            }
+            rally_between = (
+                None if fraction is None else fraction >= RALLY_BALL_RETURN_FRACTION
+            )
             if same_server and can_have_second and gap <= max_second_gap and rally_between is False:
                 attempt["attempt"] = 2
-                attempt["ball_return_fraction_since_previous"] = round(fraction, 3)
+                attempt["second_serve_evidence"] = second_serve_evidence
+                attempt["ball_return_fraction_since_previous"] = second_serve_evidence[
+                    "ball_return_fraction"
+                ]
                 attempt["ball_tracked_frames_since_previous"] = tracked
+                if fraction >= max(0.0, RALLY_BALL_RETURN_FRACTION - 0.05):
+                    attempt.setdefault("review_reasons", []).append(
+                        "second_serve_grouping_contested"
+                    )
                 previous["attempts"].append(attempt)
                 continue
+            attempt["previous_motion_evidence"] = second_serve_evidence
         grouped.append(point)
 
     hypotheses = []
@@ -454,8 +463,7 @@ def build_hypotheses(
             "serve_motions": len(motions),
             "point_hypotheses": len(hypotheses),
             "high_confidence_hypotheses": sum(1 for item in hypotheses if item["confidence"] == "high"),
-            "medium_confidence_hypotheses": sum(1 for item in hypotheses if item["confidence"] == "medium"),
-            "low_confidence_hypotheses": sum(1 for item in hypotheses if item["confidence"] == "low"),
+            "uncertain_hypotheses": sum(1 for item in hypotheses if item["confidence"] == "uncertain"),
         },
         "activity_spans": spans,
         "serve_motions": motions,
@@ -504,13 +512,14 @@ def evaluate_against_manifest(hypotheses, manifest_path):
     return {
         "manifest": manifest_path,
         "truth_points": len(truth),
-        "matched_truth_points": len(matched_truth),
+        "truth_points_with_any_overlap": len(matched_truth),
         "hypotheses": len(hypotheses),
-        "matched_hypotheses": len(matched_hypotheses),
-        "start_recall_proxy": round(len(matched_truth) / float(len(truth)), 3),
-        "proposal_precision_proxy": round(len(matched_hypotheses) / float(max(1, len(hypotheses))), 3),
+        "hypotheses_with_any_overlap": len(matched_hypotheses),
         "mean_iou_agreement_not_accuracy": round(sum(ious) / len(ious), 3) if ious else 0.0,
-        "caveat": "Manifest ranges are not independent point-end ground truth; use as agreement only.",
+        "caveat": (
+            "Manifest ranges tile the clip and are not independent point-end ground truth; "
+            "overlap counts are agreement diagnostics, not precision or recall."
+        ),
     }
 
 
@@ -583,10 +592,12 @@ def print_summary(result):
     evaluation = result.get("evaluation")
     if evaluation:
         print(
-            "manifest agreement: recall_proxy={recall} precision_proxy={precision} "
-            "mean_iou={iou} ({caveat})".format(
-                recall=evaluation["start_recall_proxy"],
-                precision=evaluation["proposal_precision_proxy"],
+            "manifest agreement: truth_overlap={truth}/{truth_total} "
+            "hypothesis_overlap={hyp}/{hyp_total} mean_iou={iou} ({caveat})".format(
+                truth=evaluation["truth_points_with_any_overlap"],
+                truth_total=evaluation["truth_points"],
+                hyp=evaluation["hypotheses_with_any_overlap"],
+                hyp_total=evaluation["hypotheses"],
                 iou=evaluation["mean_iou_agreement_not_accuracy"],
                 caveat=evaluation["caveat"],
             )
