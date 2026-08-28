@@ -41,15 +41,22 @@ CONTACT_TOLERANCE_FRAMES = 3
 MAX_SERVE_FLIGHT_SECONDS = 1.5
 MIN_SERVE_FLIGHT_SECONDS = 0.33
 
-# Updated when bounces began coming from bounce_detect rather than the sparser
-# jsonl event stream. Points 2 and 6 gained the landings their serves always had,
-# so both moved off "struck but not observed" onto real verdicts. Point 6 is the
-# one to watch: it reported first_serve_in before this work too, but off a rally
-# lob's bounce 195 frames after the serve. It now reports the same verdict from
-# its own landing 24 frames after the strike.
+# Kept in step with analyze_tennis_events.
+COURT_NET_Y_FT = 39.0
+NET_LINE_CONTACT_BAND_FT = 2.0
+
+# Point 6 gained the landing its serve always had when bounces began coming from
+# bounce_detect rather than the sparser jsonl event stream. It reported
+# first_serve_in before this work too, but off a rally lob's bounce 195 frames
+# after the serve; it now reports the same verdict from its own landing 24 frames
+# after the strike, which is the whole point of the exercise.
+#
+# Point 2 briefly read first_serve_in on the same integration and it was wrong.
+# The bounce underneath it (f652) is a ball sitting at the net for 50 frames, not
+# the served ball, which the tracker lost at contact. It abstains again.
 EXPECTED_STATES = {
     1: "first_serve_in",
-    2: "first_serve_in",
+    2: "serve_struck_bounce_unobserved",
     3: "double_fault",
     4: "first_serve_fault",
     5: "serve_struck_bounce_unobserved",
@@ -66,11 +73,10 @@ FORBIDDEN_LANDING_STATES = {"first_serve_in", "second_serve_in", "first_serve_fa
 # checking only the resulting attempt count would pass even if a guard broke and
 # the other happened to cover for it.
 EXPECTED_SECOND_SERVE_REJECTIONS = {
-    # Point 2's serve is now known to have landed in, so the sequence ends there
-    # and the second detected motion is never considered. It used to be rejected
-    # by the rally test instead -- that test is no longer reached here, so the
-    # only guard still exercised on this clip is point 5's.
-    2: ("serve_landed_in", 2),
+    # A rally was under way: the ball came back over the net between the strikes,
+    # so point 2's second detected motion is a rally stroke played from behind
+    # the baseline, not a second serve.
+    2: ("ball_returned_over_net_between_strikes", 2),
     # The far-extension candidate at 2491 has no toss of its own; it is the
     # server waiting to receive.
     5: ("next_motion_has_no_tracked_toss", 2),
@@ -175,6 +181,33 @@ def validate_landings_are_anchored(analysis):
     return errors
 
 
+def validate_no_landing_judged_on_the_net(analysis):
+    """No serve verdict may rest on a bounce sitting on the net line.
+
+    A ball that clips the cord projects to within a foot of the net line, and
+    the service-box test reads that as "in" whenever it lands a hair past it.
+    Two such contacts were being consumed as landings (point 2 f652, point 3
+    f1682), so this asserts the class rather than those two frames.
+    """
+    errors = []
+    for point in analysis.get("points") or []:
+        for attempt in (point.get("serve_analysis") or {}).get("attempts") or []:
+            if not attempt.get("bounce_id"):
+                continue
+            world_point = attempt.get("world_point")
+            if not world_point:
+                continue
+            distance = abs(world_point[1] - COURT_NET_Y_FT)
+            if distance <= NET_LINE_CONTACT_BAND_FT:
+                errors.append(
+                    f"point {point['index']}: attempt {attempt.get('attempt')} judged "
+                    f"{attempt.get('result')!r} from bounce {attempt.get('bounce_id')} "
+                    f"only {distance:.1f}ft from the net line -- that is a net "
+                    "contact, not a landing"
+                )
+    return errors
+
+
 def validate_second_serve_rejections(analysis):
     """The guards against promoting a rally stroke to a second serve still hold."""
     errors = []
@@ -235,6 +268,7 @@ def main():
     errors.extend(validate_contacts(analysis))
     errors.extend(validate_states(analysis))
     errors.extend(validate_landings_are_anchored(analysis))
+    errors.extend(validate_no_landing_judged_on_the_net(analysis))
     errors.extend(validate_second_serve_rejections(analysis))
     errors.extend(validate_fallback_is_visible(analysis))
     if errors:
