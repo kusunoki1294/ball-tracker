@@ -1,0 +1,641 @@
+import argparse
+import json
+import os
+
+from analyze_tennis_events import (
+    COURT_NET_Y_FT,
+    FPS_DEFAULT,
+    MAX_SERVE_FLIGHT_SECONDS,
+    MIN_SERVE_FLIGHT_SECONDS,
+    NET_LINE_CONTACT_BAND_FT,
+    parse_point_ranges,
+    read_tracking_log,
+    side_opponent,
+    world_point_in_receiver_service_box,
+)
+from bounce_detect import detect_bounces
+from serve_detect import (
+    MAX_SECOND_SERVE_GAP_SECONDS,
+    ball_return_fraction,
+    detect_serve_motions_for_point,
+    frame_window,
+)
+from track_ball_yolo import build_inverse_court_homography, load_court_calibration
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description=(
+            "Infer point-like timeline hypotheses from a tracking log. This does "
+            "not replace a manifest; it emits uncertain candidates with reasons."
+        )
+    )
+    parser.add_argument("--jsonl", required=True, help="Input track_ball_yolo JSONL.")
+    parser.add_argument("--court-calib-file", required=True, help="Court calibration JSON.")
+    parser.add_argument("--fps", type=float, default=FPS_DEFAULT)
+    parser.add_argument("--out", help="Optional output JSON path.")
+    parser.add_argument(
+        "--manifest",
+        help="Optional manifest whose point_frames are used only for evaluation.",
+    )
+    parser.add_argument(
+        "--expected-contact-frames",
+        default="",
+        help="Optional comma-separated verified serve-contact frames for contact-level evaluation.",
+    )
+    parser.add_argument(
+        "--contact-tolerance-frames",
+        type=int,
+        default=3,
+        help="Tolerance for --expected-contact-frames evaluation.",
+    )
+    parser.add_argument(
+        "--activity-gap-seconds",
+        type=float,
+        default=2.0,
+        help="Ball-observation gap that splits local activity spans.",
+    )
+    parser.add_argument(
+        "--span-pad-seconds",
+        type=float,
+        default=1.5,
+        help="Pad activity spans before running serve-motion detection.",
+    )
+    parser.add_argument(
+        "--scan-window-seconds",
+        type=float,
+        default=15.0,
+        help="Sliding player-motion window used as a backstop when ball activity is missing.",
+    )
+    parser.add_argument(
+        "--scan-step-seconds",
+        type=float,
+        default=5.0,
+        help="Step for the sliding serve-motion backstop.",
+    )
+    return parser.parse_args()
+
+
+def ball_center(row):
+    ball = row.get("ball") if row else None
+    center = ball.get("center") if ball else None
+    return center if center and len(center) == 2 else None
+
+
+def ball_frame_stats(rows):
+    frames = []
+    coasted = 0
+    repeats = 0
+    previous_center = None
+    for row in rows:
+        center = ball_center(row)
+        if not center:
+            previous_center = None
+            continue
+        frames.append(int(row["frame"]))
+        ball = row["ball"]
+        if ball.get("interpolated") or ball.get("motion_gate") == "coast":
+            coasted += 1
+        if previous_center == center:
+            repeats += 1
+        previous_center = center
+    return {
+        "frames_with_ball": len(frames),
+        "coasted_or_interpolated": coasted,
+        "exact_repeats": repeats,
+        "distinct_real_observations": max(0, len(frames) - repeats),
+    }
+
+
+def activity_spans(rows, fps, gap_seconds):
+    gap_frames = frame_window(gap_seconds, fps)
+    frames = [int(row["frame"]) for row in rows if ball_center(row)]
+    if not frames:
+        return []
+    spans = []
+    start = frames[0]
+    previous = frames[0]
+    for frame in frames[1:]:
+        if frame - previous > gap_frames:
+            spans.append({"start_frame": start, "end_frame": previous})
+            start = frame
+        previous = frame
+    spans.append({"start_frame": start, "end_frame": previous})
+    return spans
+
+
+def expand_span(span, first_frame, last_frame, fps, seconds):
+    pad = frame_window(seconds, fps)
+    return {
+        "start_frame": max(first_frame, span["start_frame"] - pad),
+        "end_frame": min(last_frame, span["end_frame"] + pad),
+    }
+
+
+def collect_serve_motions(
+    by_frame,
+    spans,
+    first_frame,
+    last_frame,
+    inv_homography,
+    fps,
+    pad_seconds,
+    scan_window_seconds,
+    scan_step_seconds,
+):
+    motions = []
+
+    def scan_window(start_frame, end_frame, source_window, span_index=None):
+        for side in ("near", "far"):
+            for motion in detect_serve_motions_for_point(
+                by_frame,
+                start_frame,
+                end_frame,
+                side,
+                inv_homography,
+                fps,
+            ):
+                item = dict(motion)
+                item["server"] = side
+                item["receiver"] = side_opponent(side)
+                item["activity_span_index"] = span_index
+                item["window_start_frame"] = start_frame
+                item["window_end_frame"] = end_frame
+                item["timeline_window_source"] = source_window
+                motions.append(item)
+
+    for span_index, span in enumerate(spans, start=1):
+        window = expand_span(span, first_frame, last_frame, fps, pad_seconds)
+        scan_window(window["start_frame"], window["end_frame"], "activity_span", span_index)
+
+    scan_window_frames = frame_window(scan_window_seconds, fps)
+    scan_step_frames = max(1, frame_window(scan_step_seconds, fps))
+    frame = first_frame
+    while frame <= last_frame:
+        scan_window(
+            frame,
+            min(last_frame, frame + scan_window_frames - 1),
+            "sliding_window",
+        )
+        frame += scan_step_frames
+    return dedupe_motions(motions, fps)
+
+
+def motion_rank(motion):
+    source_score = {"ball_toss": 2, "peak_reach": 1}.get(motion.get("source"), 0)
+    confidence_score = {"high": 3, "medium": 2, "low": 1}.get(motion.get("confidence"), 0)
+    return (confidence_score, source_score, -int(motion["contact_frame"]))
+
+
+def dedupe_motions(motions, fps):
+    kept = []
+    window = frame_window(0.75, fps)
+    for motion in sorted(motions, key=lambda item: int(item["contact_frame"])):
+        clash_index = None
+        for index, kept_motion in enumerate(kept):
+            if abs(int(motion["contact_frame"]) - int(kept_motion["contact_frame"])) <= window:
+                clash_index = index
+                break
+        if clash_index is None:
+            kept.append(motion)
+        elif motion_rank(motion) > motion_rank(kept[clash_index]):
+            kept[clash_index] = motion
+    return sorted(kept, key=lambda item: int(item["contact_frame"]))
+
+
+def detector_bounces(rows, court_calib_file):
+    with open(court_calib_file, "r", encoding="utf-8") as handle:
+        calib_points = json.load(handle)["points"]
+    bounces = detect_bounces(rows, calib_points)
+    for index, bounce in enumerate(bounces, start=1):
+        bounce["id"] = f"bounce_{index:03d}"
+        bounce["frame"] = int(bounce["frame"])
+    return bounces
+
+
+def serve_landing_after_contact(bounces, contact_frame, server, fps):
+    skipped_net_line = []
+    for bounce in bounces:
+        lag = int(bounce["frame"]) - int(contact_frame)
+        if lag <= 0:
+            continue
+        if lag > frame_window(MAX_SERVE_FLIGHT_SECONDS, fps):
+            break
+        if lag < frame_window(MIN_SERVE_FLIGHT_SECONDS, fps):
+            continue
+        world_point = bounce.get("world_point")
+        if world_point and abs(float(world_point[1]) - COURT_NET_Y_FT) <= NET_LINE_CONTACT_BAND_FT:
+            skipped_net_line.append(bounce)
+            continue
+        receiver = side_opponent(server)
+        result = "unknown"
+        reason = "serve_bounce_not_adjudicable"
+        if world_point_in_receiver_service_box(world_point, receiver):
+            result = "in"
+            reason = "receiver_service_box"
+        elif world_point:
+            result = "fault"
+            reason = "outside_receiver_service_box"
+        return {
+            "bounce_id": bounce.get("id"),
+            "bounce_frame": bounce["frame"],
+            "world_point": world_point,
+            "result": result,
+            "reason": reason,
+            "lag_frames": lag,
+            "skipped_net_line_bounce_ids": [item["id"] for item in skipped_net_line],
+        }
+    if skipped_net_line:
+        return {
+            "bounce_id": None,
+            "bounce_frame": None,
+            "world_point": None,
+            "result": "unknown",
+            "reason": "serve_bounce_net_line_contact",
+            "lag_frames": None,
+            "skipped_net_line_bounce_ids": [item["id"] for item in skipped_net_line],
+        }
+    return {
+        "bounce_id": None,
+        "bounce_frame": None,
+        "world_point": None,
+        "result": "unknown",
+        "reason": "serve_bounce_not_detected",
+        "lag_frames": None,
+        "skipped_net_line_bounce_ids": [],
+    }
+
+
+def isolation_before(ball_frames, contact_frame, fps):
+    previous = [frame for frame in ball_frames if frame < contact_frame]
+    if not previous:
+        return None
+    gap = contact_frame - previous[-1]
+    return {
+        "dead_frames_before": gap,
+        "isolated_by_deadtime": gap >= frame_window(1.5, fps),
+    }
+
+
+def local_fragmentation(spans, contact_frame, fps):
+    radius = frame_window(20.0, fps)
+    nearby = [
+        span
+        for span in spans
+        if span["start_frame"] <= contact_frame + radius and span["end_frame"] >= contact_frame - radius
+    ]
+    return {
+        "nearby_activity_spans": len(nearby),
+        "spans_per_minute": round(len(nearby) / ((2 * radius + 1) / fps / 60.0), 2),
+    }
+
+
+def confidence_for_point(attempts, isolation, fragmentation):
+    score = 0.35
+    reasons = []
+    first = attempts[0]
+    if first["source"] == "ball_toss":
+        score += 0.18
+        reasons.append("serve_has_tracked_toss")
+    else:
+        reasons.append("serve_from_reach_fallback")
+    if first["landing"]["bounce_id"]:
+        score += 0.2
+        reasons.append("serve_corroborated_by_landing")
+    else:
+        reasons.append(first["landing"]["reason"])
+    if first["landing"]["result"] == "in":
+        score += 0.08
+        reasons.append("landing_in_box")
+    if isolation and isolation.get("isolated_by_deadtime"):
+        score += 0.12
+        reasons.append("isolated_by_deadtime")
+    else:
+        reasons.append("not_isolated_by_deadtime")
+    if fragmentation["nearby_activity_spans"] >= 5:
+        score -= 0.15
+        reasons.append("high_local_fragmentation")
+    elif fragmentation["nearby_activity_spans"] >= 3:
+        score -= 0.07
+        reasons.append("moderate_local_fragmentation")
+    if len(attempts) == 2:
+        reasons.append("second_serve_grouped_after_fault_or_unknown")
+    score = max(0.0, min(1.0, score))
+    if score >= 0.75:
+        label = "high"
+    elif score >= 0.55:
+        label = "medium"
+    else:
+        label = "low"
+    return round(score, 3), label, reasons
+
+
+def build_hypotheses(
+    rows,
+    by_frame,
+    court_calib_file,
+    fps,
+    activity_gap_seconds,
+    span_pad_seconds,
+    scan_window_seconds,
+    scan_step_seconds,
+):
+    if not rows:
+        return {"hypotheses": [], "activity_spans": [], "summary": {}}
+    first_frame = int(rows[0]["frame"])
+    last_frame = int(rows[-1]["frame"])
+    inv_homography = build_inverse_court_homography(load_court_calibration(court_calib_file))
+    spans = activity_spans(rows, fps, activity_gap_seconds)
+    ball_frames = [int(row["frame"]) for row in rows if ball_center(row)]
+    motions = collect_serve_motions(
+        by_frame,
+        spans,
+        first_frame,
+        last_frame,
+        inv_homography,
+        fps,
+        span_pad_seconds,
+        scan_window_seconds,
+        scan_step_seconds,
+    )
+    bounces = detector_bounces(rows, court_calib_file)
+
+    raw_points = []
+    for motion in motions:
+        landing = serve_landing_after_contact(bounces, motion["contact_frame"], motion["server"], fps)
+        attempt = {
+            "attempt": 1,
+            "contact_frame": int(motion["contact_frame"]),
+            "server": motion["server"],
+            "receiver": motion["receiver"],
+            "source": motion.get("source"),
+            "confidence": motion.get("confidence"),
+            "reasons": motion.get("reasons", []),
+            "landing": landing,
+        }
+        raw_points.append({"attempts": [attempt]})
+
+    grouped = []
+    max_second_gap = frame_window(MAX_SECOND_SERVE_GAP_SECONDS, fps)
+    for point in raw_points:
+        attempt = point["attempts"][0]
+        if grouped:
+            previous = grouped[-1]
+            previous_attempt = previous["attempts"][-1]
+            gap = attempt["contact_frame"] - previous_attempt["contact_frame"]
+            same_server = attempt["server"] == previous_attempt["server"]
+            can_have_second = len(previous["attempts"]) == 1 and previous_attempt["landing"]["result"] != "in"
+            fraction, tracked = ball_return_fraction(
+                by_frame,
+                previous_attempt["contact_frame"],
+                attempt["contact_frame"],
+                previous_attempt["server"],
+                inv_homography,
+                fps,
+            )
+            rally_between = None if fraction is None else fraction >= 0.35
+            if same_server and can_have_second and gap <= max_second_gap and rally_between is False:
+                attempt["attempt"] = 2
+                attempt["ball_return_fraction_since_previous"] = round(fraction, 3)
+                attempt["ball_tracked_frames_since_previous"] = tracked
+                previous["attempts"].append(attempt)
+                continue
+        grouped.append(point)
+
+    hypotheses = []
+    for index, point in enumerate(grouped, start=1):
+        first_attempt = point["attempts"][0]
+        contact_frame = first_attempt["contact_frame"]
+        next_contact = grouped[index]["attempts"][0]["contact_frame"] if index < len(grouped) else None
+        start_frame = max(first_frame, contact_frame - frame_window(1.5, fps))
+        if next_contact is None:
+            end_frame = last_frame
+        else:
+            observed = [frame for frame in ball_frames if contact_frame <= frame < next_contact]
+            end_frame = observed[-1] if observed else next_contact - 1
+        isolation = isolation_before(ball_frames, contact_frame, fps)
+        fragmentation = local_fragmentation(spans, contact_frame, fps)
+        score, confidence, reasons = confidence_for_point(point["attempts"], isolation, fragmentation)
+        hypotheses.append(
+            {
+                "id": f"point_hypothesis_{index:03d}",
+                "start_frame": start_frame,
+                "end_frame": end_frame,
+                "start_source": "serve_contact_minus_1.5s",
+                "end_source": "last_ball_activity_before_next_hypothesis" if next_contact else "end_of_log",
+                "confidence_score": score,
+                "confidence": confidence,
+                "reasons": reasons,
+                "ends_have_no_truth": True,
+                "serve_count": len(point["attempts"]),
+                "serve_corroborated": any(attempt["landing"]["bounce_id"] for attempt in point["attempts"]),
+                "landing_in_box": any(attempt["landing"]["result"] == "in" for attempt in point["attempts"]),
+                "isolation": isolation,
+                "local_fragmentation": fragmentation,
+                "attempts": point["attempts"],
+            }
+        )
+
+    stats = ball_frame_stats(rows)
+    total_frames = max(1, last_frame - first_frame + 1)
+    stats["total_frames"] = total_frames
+    stats["frames_with_ball_pct"] = round(100.0 * stats["frames_with_ball"] / total_frames, 1)
+    stats["distinct_real_observations_pct"] = round(
+        100.0 * stats["distinct_real_observations"] / total_frames, 1
+    )
+    return {
+        "source_jsonl": None,
+        "court_calib_file": court_calib_file,
+        "fps": fps,
+        "frame_range": {"start_frame": first_frame, "end_frame": last_frame},
+        "summary": {
+            **stats,
+            "activity_spans": len(spans),
+            "serve_motions": len(motions),
+            "point_hypotheses": len(hypotheses),
+            "high_confidence_hypotheses": sum(1 for item in hypotheses if item["confidence"] == "high"),
+            "medium_confidence_hypotheses": sum(1 for item in hypotheses if item["confidence"] == "medium"),
+            "low_confidence_hypotheses": sum(1 for item in hypotheses if item["confidence"] == "low"),
+        },
+        "activity_spans": spans,
+        "serve_motions": motions,
+        "hypotheses": hypotheses,
+    }
+
+
+def overlap(a_start, a_end, b_start, b_end):
+    return max(0, min(a_end, b_end) - max(a_start, b_start) + 1)
+
+
+def evaluate_against_manifest(hypotheses, manifest_path):
+    with open(manifest_path, "r", encoding="utf-8") as handle:
+        manifest = json.load(handle)
+    truth = parse_point_ranges(",".join(
+        f"{item['start_frame']}-{item['end_frame']}" for item in manifest.get("point_frames", [])
+    ))
+    if not truth:
+        return None
+    matched_truth = set()
+    matched_hypotheses = set()
+    ious = []
+    for h_index, hypothesis in enumerate(hypotheses):
+        best = None
+        for t_index, point_range in enumerate(truth):
+            shared = overlap(
+                hypothesis["start_frame"],
+                hypothesis["end_frame"],
+                point_range["start_frame"],
+                point_range["end_frame"],
+            )
+            if not shared:
+                continue
+            union = (
+                max(hypothesis["end_frame"], point_range["end_frame"])
+                - min(hypothesis["start_frame"], point_range["start_frame"])
+                + 1
+            )
+            iou = shared / float(union)
+            if best is None or iou > best[1]:
+                best = (t_index, iou)
+        if best:
+            matched_hypotheses.add(h_index)
+            matched_truth.add(best[0])
+            ious.append(best[1])
+    return {
+        "manifest": manifest_path,
+        "truth_points": len(truth),
+        "matched_truth_points": len(matched_truth),
+        "hypotheses": len(hypotheses),
+        "matched_hypotheses": len(matched_hypotheses),
+        "start_recall_proxy": round(len(matched_truth) / float(len(truth)), 3),
+        "proposal_precision_proxy": round(len(matched_hypotheses) / float(max(1, len(hypotheses))), 3),
+        "mean_iou_agreement_not_accuracy": round(sum(ious) / len(ious), 3) if ious else 0.0,
+        "caveat": "Manifest ranges are not independent point-end ground truth; use as agreement only.",
+    }
+
+
+def parse_contact_frames(raw):
+    if not raw:
+        return []
+    return [int(token.strip()) for token in raw.split(",") if token.strip()]
+
+
+def evaluate_contacts(motions, expected_frames, tolerance):
+    if not expected_frames:
+        return None
+    matched_expected = set()
+    matched_motions = set()
+    for motion_index, motion in enumerate(motions):
+        frame = int(motion["contact_frame"])
+        for expected_index, expected in enumerate(expected_frames):
+            if abs(frame - expected) <= tolerance:
+                matched_expected.add(expected_index)
+                matched_motions.add(motion_index)
+                break
+    return {
+        "expected_contacts": len(expected_frames),
+        "matched_expected_contacts": len(matched_expected),
+        "detected_contacts": len(motions),
+        "matched_detected_contacts": len(matched_motions),
+        "contact_recall": round(len(matched_expected) / float(len(expected_frames)), 3),
+        "contact_precision": round(len(matched_motions) / float(max(1, len(motions))), 3),
+        "tolerance_frames": tolerance,
+    }
+
+
+def print_summary(result):
+    summary = result["summary"]
+    print(
+        "timeline hypotheses: {points} candidates, {motions} serve motions, "
+        "{spans} activity spans".format(
+            points=summary["point_hypotheses"],
+            motions=summary["serve_motions"],
+            spans=summary["activity_spans"],
+        )
+    )
+    print(
+        "ball observations: {with_ball}/{total} ({with_pct}%), distinct real "
+        "{distinct}/{total} ({distinct_pct}%)".format(
+            with_ball=summary["frames_with_ball"],
+            total=summary["total_frames"],
+            with_pct=summary["frames_with_ball_pct"],
+            distinct=summary["distinct_real_observations"],
+            distinct_pct=summary["distinct_real_observations_pct"],
+        )
+    )
+    for hypothesis in result["hypotheses"]:
+        first = hypothesis["attempts"][0]
+        print(
+            "{id} f{start}-{end} {conf} score={score:.3f} "
+            "server={server} contact=f{contact} serves={serve_count} "
+            "landing={landing}".format(
+                id=hypothesis["id"],
+                start=hypothesis["start_frame"],
+                end=hypothesis["end_frame"],
+                conf=hypothesis["confidence"],
+                score=hypothesis["confidence_score"],
+                server=first["server"],
+                contact=first["contact_frame"],
+                serve_count=hypothesis["serve_count"],
+                landing=first["landing"]["reason"],
+            )
+        )
+    evaluation = result.get("evaluation")
+    if evaluation:
+        print(
+            "manifest agreement: recall_proxy={recall} precision_proxy={precision} "
+            "mean_iou={iou} ({caveat})".format(
+                recall=evaluation["start_recall_proxy"],
+                precision=evaluation["proposal_precision_proxy"],
+                iou=evaluation["mean_iou_agreement_not_accuracy"],
+                caveat=evaluation["caveat"],
+            )
+        )
+    contact_evaluation = result.get("contact_evaluation")
+    if contact_evaluation:
+        print(
+            "contact agreement: recall={recall} precision={precision} "
+            "matched={matched}/{expected} detected={detected} tolerance=+/-{tol}f".format(
+                recall=contact_evaluation["contact_recall"],
+                precision=contact_evaluation["contact_precision"],
+                matched=contact_evaluation["matched_expected_contacts"],
+                expected=contact_evaluation["expected_contacts"],
+                detected=contact_evaluation["detected_contacts"],
+                tol=contact_evaluation["tolerance_frames"],
+            )
+        )
+
+
+def main():
+    args = parse_args()
+    rows, by_frame = read_tracking_log(args.jsonl)
+    result = build_hypotheses(
+        rows,
+        by_frame,
+        args.court_calib_file,
+        args.fps,
+        args.activity_gap_seconds,
+        args.span_pad_seconds,
+        args.scan_window_seconds,
+        args.scan_step_seconds,
+    )
+    result["source_jsonl"] = args.jsonl
+    if args.manifest:
+        result["evaluation"] = evaluate_against_manifest(result["hypotheses"], args.manifest)
+    expected_contacts = parse_contact_frames(args.expected_contact_frames)
+    if expected_contacts:
+        result["contact_evaluation"] = evaluate_contacts(
+            result["serve_motions"],
+            expected_contacts,
+            args.contact_tolerance_frames,
+        )
+    print_summary(result)
+    if args.out:
+        os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+        with open(args.out, "w", encoding="utf-8") as handle:
+            json.dump(result, handle, indent=2)
+            handle.write("\n")
+
+
+if __name__ == "__main__":
+    main()
