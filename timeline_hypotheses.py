@@ -14,12 +14,16 @@ from bounce_detect import detect_bounces
 from serve_detect import (
     MAX_SECOND_SERVE_GAP_SECONDS,
     RALLY_BALL_RETURN_FRACTION,
+    RALLY_MIN_TRACKED_SECONDS,
     REACH_SEARCH_SECONDS,
     ball_return_fraction,
     detect_serve_motions_for_point,
     frame_window,
 )
 from track_ball_yolo import build_inverse_court_homography, load_court_calibration
+
+
+SECOND_SERVE_MIN_TRACKED_SECONDS = 2.0
 
 
 def parse_args():
@@ -323,6 +327,41 @@ def confidence_for_point(attempts, isolation, fragmentation):
     return round(score, 3), label, reasons
 
 
+def second_serve_grouping_evidence(
+    by_frame,
+    inv_homography,
+    previous_attempt,
+    attempt,
+    fps,
+):
+    fraction, tracked = ball_return_fraction(
+        by_frame,
+        previous_attempt["contact_frame"],
+        attempt["contact_frame"],
+        previous_attempt["server"],
+        inv_homography,
+        fps,
+    )
+    min_tracked = frame_window(
+        max(RALLY_MIN_TRACKED_SECONDS, SECOND_SERVE_MIN_TRACKED_SECONDS),
+        fps,
+    )
+    enough_track = tracked >= min_tracked
+    return {
+        "gap_frames": attempt["contact_frame"] - previous_attempt["contact_frame"],
+        "ball_return_fraction": round(fraction, 3) if fraction is not None else None,
+        "ball_tracked_frames": tracked,
+        "min_ball_tracked_frames": min_tracked,
+        "min_ball_tracked_seconds": max(
+            RALLY_MIN_TRACKED_SECONDS,
+            SECOND_SERVE_MIN_TRACKED_SECONDS,
+        ),
+        "enough_ball_track": enough_track,
+        "rally_return_fraction_threshold": RALLY_BALL_RETURN_FRACTION,
+        "rally_between_serves": None if fraction is None else fraction >= RALLY_BALL_RETURN_FRACTION,
+    }
+
+
 def build_hypotheses(
     rows,
     by_frame,
@@ -378,36 +417,49 @@ def build_hypotheses(
             gap = attempt["contact_frame"] - previous_attempt["contact_frame"]
             same_server = attempt["server"] == previous_attempt["server"]
             can_have_second = len(previous["attempts"]) == 1 and previous_attempt["landing"]["result"] != "in"
-            fraction, tracked = ball_return_fraction(
+            second_serve_evidence = second_serve_grouping_evidence(
                 by_frame,
-                previous_attempt["contact_frame"],
-                attempt["contact_frame"],
-                previous_attempt["server"],
                 inv_homography,
+                previous_attempt,
+                attempt,
                 fps,
             )
-            second_serve_evidence = {
-                "gap_frames": gap,
-                "ball_return_fraction": round(fraction, 3) if fraction is not None else None,
-                "ball_tracked_frames": tracked,
-                "rally_return_fraction_threshold": RALLY_BALL_RETURN_FRACTION,
-            }
-            rally_between = (
-                None if fraction is None else fraction >= RALLY_BALL_RETURN_FRACTION
-            )
-            if same_server and can_have_second and gap <= max_second_gap and rally_between is False:
+            enough_track = second_serve_evidence["enough_ball_track"]
+            rally_between = second_serve_evidence["rally_between_serves"]
+            has_tracked_toss = attempt.get("source") == "ball_toss"
+            if (
+                same_server
+                and can_have_second
+                and gap <= max_second_gap
+                and enough_track
+                and has_tracked_toss
+                and rally_between is False
+            ):
                 attempt["attempt"] = 2
                 attempt["second_serve_evidence"] = second_serve_evidence
                 attempt["ball_return_fraction_since_previous"] = second_serve_evidence[
                     "ball_return_fraction"
                 ]
-                attempt["ball_tracked_frames_since_previous"] = tracked
-                if fraction >= max(0.0, RALLY_BALL_RETURN_FRACTION - 0.05):
+                attempt["ball_tracked_frames_since_previous"] = second_serve_evidence[
+                    "ball_tracked_frames"
+                ]
+                if second_serve_evidence["ball_return_fraction"] >= max(
+                    0.0,
+                    RALLY_BALL_RETURN_FRACTION - 0.05,
+                ):
                     attempt.setdefault("review_reasons", []).append(
                         "second_serve_grouping_contested"
                     )
                 previous["attempts"].append(attempt)
                 continue
+            if same_server and can_have_second and gap <= max_second_gap and not enough_track:
+                attempt.setdefault("review_reasons", []).append(
+                    "second_serve_grouping_insufficient_ball_track"
+                )
+            if same_server and can_have_second and gap <= max_second_gap and not has_tracked_toss:
+                attempt.setdefault("review_reasons", []).append(
+                    "second_serve_grouping_requires_tracked_toss"
+                )
             attempt["previous_motion_evidence"] = second_serve_evidence
         grouped.append(point)
 
@@ -464,6 +516,11 @@ def build_hypotheses(
             "point_hypotheses": len(hypotheses),
             "high_confidence_hypotheses": sum(1 for item in hypotheses if item["confidence"] == "high"),
             "uncertain_hypotheses": sum(1 for item in hypotheses if item["confidence"] == "uncertain"),
+            "confidence_caveat": (
+                "Hypothesis confidence is clip-relative and experimental. "
+                "It is not a scoring contract; serve_count and point boundaries "
+                "remain hypotheses until independently verified."
+            ),
         },
         "activity_spans": spans,
         "serve_motions": motions,
@@ -484,9 +541,8 @@ def evaluate_against_manifest(hypotheses, manifest_path):
     if not truth:
         return None
     matched_truth = set()
-    matched_hypotheses = set()
     ious = []
-    for h_index, hypothesis in enumerate(hypotheses):
+    for hypothesis in hypotheses:
         best = None
         for t_index, point_range in enumerate(truth):
             shared = overlap(
@@ -506,7 +562,6 @@ def evaluate_against_manifest(hypotheses, manifest_path):
             if best is None or iou > best[1]:
                 best = (t_index, iou)
         if best:
-            matched_hypotheses.add(h_index)
             matched_truth.add(best[0])
             ious.append(best[1])
     return {
@@ -514,11 +569,10 @@ def evaluate_against_manifest(hypotheses, manifest_path):
         "truth_points": len(truth),
         "truth_points_with_any_overlap": len(matched_truth),
         "hypotheses": len(hypotheses),
-        "hypotheses_with_any_overlap": len(matched_hypotheses),
         "mean_iou_agreement_not_accuracy": round(sum(ious) / len(ious), 3) if ious else 0.0,
         "caveat": (
             "Manifest ranges tile the clip and are not independent point-end ground truth; "
-            "overlap counts are agreement diagnostics, not precision or recall."
+            "truth overlap and IoU are agreement diagnostics, not precision or recall."
         ),
     }
 
@@ -572,6 +626,7 @@ def print_summary(result):
             distinct_pct=summary["distinct_real_observations_pct"],
         )
     )
+    print("confidence caveat: {caveat}".format(caveat=summary["confidence_caveat"]))
     for hypothesis in result["hypotheses"]:
         first = hypothesis["attempts"][0]
         print(
@@ -593,11 +648,9 @@ def print_summary(result):
     if evaluation:
         print(
             "manifest agreement: truth_overlap={truth}/{truth_total} "
-            "hypothesis_overlap={hyp}/{hyp_total} mean_iou={iou} ({caveat})".format(
+            "mean_iou={iou} ({caveat})".format(
                 truth=evaluation["truth_points_with_any_overlap"],
                 truth_total=evaluation["truth_points"],
-                hyp=evaluation["hypotheses_with_any_overlap"],
-                hyp_total=evaluation["hypotheses"],
                 iou=evaluation["mean_iou_agreement_not_accuracy"],
                 caveat=evaluation["caveat"],
             )
