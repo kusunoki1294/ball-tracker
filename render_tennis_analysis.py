@@ -10,6 +10,7 @@ SCORE_COLOR = (255, 255, 255)
 PANEL_COLOR = (20, 24, 28)
 SHOT_COLOR = (255, 0, 255)
 FAULT_COLOR = (0, 120, 255)
+BOUNCE_COLOR = (0, 0, 255)
 TEXT_SHADOW = (0, 0, 0)
 
 
@@ -96,6 +97,15 @@ def shot_label(shot):
     return f"{stroke} {shot_type}{speed}"
 
 
+def analysis_bounce_visible(bounce, serve_bounce_ids):
+    """Return True for bounces that should be shown as real analysis events."""
+    if not bounce.get("live", True):
+        return False
+    if bounce.get("id") in serve_bounce_ids:
+        return True
+    return bool(bounce.get("rally_scoring_eligible", True))
+
+
 def main():
     args = parse_args()
     analysis = load_analysis(args.analysis)
@@ -124,10 +134,13 @@ def main():
             continue
         missed_bounce_candidates_by_frame.setdefault(int(candidate["frame"]), []).append(candidate)
     serve_labels_by_frame = {}
+    serve_bounce_ids = set()
     for point in analysis.get("points", []):
         serve_analysis = point.get("serve_analysis") or {}
         attempts = serve_analysis.get("attempts") or []
         for attempt in attempts:
+            if attempt.get("bounce_id"):
+                serve_bounce_ids.add(attempt["bounce_id"])
             # A serve can be located without its landing ever being seen (the
             # bounce falls in a gap in the ball track), in which case there is no
             # frame to hang a label on. Skip rather than crash the render.
@@ -157,7 +170,21 @@ def main():
                     "label": "OUT",
                     "point": terminal_ball.get("last_center"),
                 }
-            )
+                )
+
+    bounces_by_frame = {}
+    visible_bounce_count = 0
+    for bounce in analysis.get("bounces", []):
+        point = bounce.get("point")
+        if not point or not analysis_bounce_visible(bounce, serve_bounce_ids):
+            continue
+        visible_bounce_count += 1
+        bounces_by_frame.setdefault(int(bounce["frame"]), []).append(
+            {
+                "point": (int(round(point[0])), int(round(point[1]))),
+                "label": f"B{visible_bounce_count}",
+            }
+        )
 
     points = analysis.get("points", [])
     cap = cv2.VideoCapture(args.video)
@@ -173,6 +200,7 @@ def main():
 
     active_labels = deque()
     active_serve_labels = deque()
+    active_bounce_markers = deque()
     frame_index = 0
     while True:
         ok, frame = cap.read()
@@ -203,11 +231,15 @@ def main():
                 )
         for item in serve_labels_by_frame.get(frame_index, []):
             active_serve_labels.append({"expires": frame_index + 70, "label": item["label"]})
+        for item in bounces_by_frame.get(frame_index, []):
+            active_bounce_markers.append({"expires": frame_index + 45, **item})
 
         while active_labels and active_labels[0]["expires"] < frame_index:
             active_labels.popleft()
         while active_serve_labels and active_serve_labels[0]["expires"] < frame_index:
             active_serve_labels.popleft()
+        while active_bounce_markers and active_bounce_markers[0]["expires"] < frame_index:
+            active_bounce_markers.popleft()
 
         active_point = point_for_frame(points, frame_index)
         point_label = f"Point {active_point['index']}" if active_point else "Point"
@@ -242,6 +274,18 @@ def main():
 
         for index, item in enumerate(active_serve_labels):
             draw_text(frame, item["label"], (34, 188 + (index * 32)), scale=0.95, color=FAULT_COLOR, thickness=3)
+
+        for item in active_bounce_markers:
+            x, y = item["point"]
+            cv2.drawMarker(
+                frame,
+                (x, y),
+                BOUNCE_COLOR,
+                markerType=cv2.MARKER_TILTED_CROSS,
+                markerSize=18,
+                thickness=2,
+            )
+            draw_text(frame, item["label"], (x + 8, max(20, y - 8)), scale=0.5, color=BOUNCE_COLOR, thickness=2)
 
         for item in active_labels:
             x, y = item["point"]
