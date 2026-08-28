@@ -456,6 +456,10 @@ def build_hypotheses(
                 attempt.setdefault("review_reasons", []).append(
                     "second_serve_grouping_insufficient_ball_track"
                 )
+            if same_server and can_have_second and gap <= max_second_gap and rally_between is True:
+                attempt.setdefault("review_reasons", []).append(
+                    "second_serve_grouping_rally_between_serves"
+                )
             if same_server and can_have_second and gap <= max_second_gap and not has_tracked_toss:
                 attempt.setdefault("review_reasons", []).append(
                     "second_serve_grouping_requires_tracked_toss"
@@ -477,6 +481,13 @@ def build_hypotheses(
         isolation = isolation_before(ball_frames, contact_frame, fps)
         fragmentation = local_fragmentation(spans, contact_frame, fps)
         score, confidence, reasons = confidence_for_point(point["attempts"], isolation, fragmentation)
+        review_reasons = sorted(
+            {
+                reason
+                for attempt in point["attempts"]
+                for reason in attempt.get("review_reasons", [])
+            }
+        )
         hypotheses.append(
             {
                 "id": f"point_hypothesis_{index:03d}",
@@ -487,6 +498,7 @@ def build_hypotheses(
                 "confidence_score": score,
                 "confidence": confidence,
                 "reasons": reasons,
+                "review_reasons": review_reasons,
                 "ends_have_no_truth": True,
                 "serve_count": len(point["attempts"]),
                 "serve_corroborated": any(attempt["landing"]["bounce_id"] for attempt in point["attempts"]),
