@@ -17,10 +17,10 @@ Current status
   - per-point debug court-map PNGs
   - static HTML match report
   - red-mark and clean overlay renders
-- The YOLO-only tracker is still experimental for:
-  - bounce detection
-  - far-side bounce detection
-  - separating true bounces from player or racket contact points
+- The YOLO-only analysis path is still experimental for:
+  - fully automated point timeline hypotheses
+  - far-side serve detection
+  - separating true in-play bounces from other real ball events without caller context
 - Second worked example (2026-08): tennis11 game 1
   - manifest: `manifests/tennis11_game1_manifest.json`
   - input slice: `yoloVids/inputs/tennis11_game1.mp4` (source 40s-151s of a full
@@ -29,11 +29,13 @@ Current status
     line-model fit, 0.4px)
   - tracking: `yoloVids/outputs/tennis11/ai11.1.{avi,jsonl}`
   - annotated render: `yoloVids/outputs/tennis11/tennis11_game1_annotated.mp4`
+  - hypothesis audit: `yoloVids/outputs/tennis11/timeline/timeline_audit.html`
   - Scoring reproduces the real game exactly (0-15, 15-15, 15-30, 30-30, 40-30,
-    game) from manual `point_winners`. Serve state and point ends are NOT
-    reliable here: only 10 bounces were detected across 6 points, so points 2
-    and 4 are misclassified as double faults from mid-rally bounces. See
-    "Bounce recall is the bottleneck" below.
+    game) from manual `point_winners`. Offline bounce detection and serve-motion
+    detection are now integrated for this clip; automatic winner inference is
+    improved but still abstains where the ball track drops critical events. The
+    fully automated timeline path is deliberately hypothesis-only and does not
+    feed scoring.
 
 Current known-good analysis target:
   - manifest: `manifests/tennis9_analysis_manifest.json`
@@ -358,10 +360,12 @@ Two things it deliberately does NOT do:
   whether a struck ball travels toward or away from camera; ball-size trend
   separated 16/23 from 7/16; striker distance overlaps because players stand where
   balls land). Contacts are FLAGGED via `near_player` and graded, never dropped.
-- It does not claim precision. Recall is measured; precision needs the
-  `--review-csv` output hand-labelled, which has not been done. Several
-  "extra" detections are verified real bounces the old detector missed - mostly
-  players dribbling the ball before serving.
+- It does not claim unqualified precision. tennis11 game 1 now has hand labels in
+  `labels/tennis11_game1_bounce_labels.csv`: 41/44 detections are real ball
+  events, but only 12/44 are live in-play bounces. The useful contract is
+  contextual: `rally_scoring_eligible` contains no labelled racket contacts or
+  dead balls on that clip, while serve adjudication uses its own contact-anchored
+  landing logic.
 
 Two caller contracts, because the consumers need different things:
 - `rally_scoring_eligible` - conservative, excludes anything near a player.
@@ -379,32 +383,58 @@ known-good event. Likewise, two bugs came from trusting the GROUND projection fo
 an airborne ball - it is wrong by construction there, and must not be used to
 choose which player to measure reach against, nor to reject a candidate outright.
 
+Automated timeline hypotheses (2026-08): `timeline_hypotheses.py`
+The automated path deliberately stops short of scoring. It turns tracked JSONL
+logs into point-like hypotheses, then exports a report that keeps uncertainty
+visible: confidence is clip-relative, `serve_count` is a hypothesis, point ends
+are inferred from activity rather than observed, and the compact JSON is marked
+`not_scoring_truth: true`.
+
+One command regenerates the current tennis11 hypothesis audit from the tracked
+game-1 and game-2 logs:
+
+    python run_timeline_pipeline.py \
+      --clip "game 1=yoloVids/outputs/tennis11/ai11.1.jsonl" \
+      --clip "game 2=yoloVids/outputs/tennis11/ai11.g2.jsonl" \
+      --court-calib-file yoloVids/calibration/court_calib_tennis11.json \
+      --out-dir yoloVids/outputs/tennis11/timeline \
+      --expected-contact-frames "game 1=159,635,1485,1659,2091,2432,2952" \
+      --manifest "game 1=manifests/tennis11_game1_manifest.json"
+
+Outputs:
+- `<label>_hypotheses.json` for each clip.
+- `timeline_audit.html` for human review.
+- `timeline_audit.json` for a compact machine-readable audit.
+
+The optional manifest and expected-contact inputs are evaluation only. They do
+not feed scoring and do not create manifest-shaped `point_frames`. Game 1 has
+verified serve contacts, so the report can show contact recall/precision. Game 2
+has no ground truth and is labelled that way instead of showing blank metrics.
+
 `eval_bounce_detect.py` also reports an ANCHORING HAZARD: detections closer to a
 serve strike than the minimum flight time. Those are the strike itself, and a
 consumer that takes the first bounce after a strike will judge the serve on it.
 That check found a live instance in the serve path.
 
-Bounce recall is the bottleneck for full automation
-- Everything above the bounce layer now works: calibration is automatic and
-  accurate to sub-pixel, ball/player tracking generalizes, point segmentation
-  exists (`cut_play_segments.py`), and the serve/point-end/scoring state machines
-  are in place. The one thing holding back "no human input of point winners" is
-  that not enough bounces are detected.
-- Measured on tennis11 game 1: 10 bounces over 6 points. Consequences observed:
-  - The serve state machine treats the first *detected* bounce of a point as the
-    serve. When the real serve bounce is missed, a mid-rally bounce takes its
-    place and the point is misread. Points 2 and 4 were called double faults
-    from bounces on the SERVER'S OWN side of the net - geometrically impossible
-    for that server's serve.
-  - Point 5 produced no bounces at all, so it is invisible to
-    `cut_play_segments.py` (it found 5 segments for 6 points) and its serve state
-    is `waiting_for_serve`.
-  - The trajectory-based recovery layer found only 1 candidate, so the gaps are
-    in the ball track itself, not just in the bounce test.
+Ball-track recall is the bottleneck for full automation
+- Offline bounce detection substantially improves recall on the existing logs:
+  tennis11 game 1 now finds 44 bounces instead of the live tracker's 10, and 6/7
+  serve landings are found under the loose contact-window metric. The remaining
+  failures are mostly not downstream logic failures; they happen where the input
+  ball track loses the ball at the critical instant.
+- The limiting measurement is now the distinct real observation rate, not the
+  raw number of frames with a ball. On tennis11 game 1 the tracker reports a
+  ball on 62.8% of frames, but after held/coasted repeats only 56.8% are distinct
+  real observations. Game 2 drops to 50.3%, and its activity spans fragment more.
+- Point timeline automation exists as `timeline_hypotheses.py`, but it is not a
+  scoring source. On game 1 it finds all 7 verified serve contacts with 0.538
+  contact precision; on game 2 it produces hypotheses without ground truth. A
+  hypothesis report is useful for review, but feeding it straight into scoring
+  would silently invent or merge points.
 Point-classification fixes (2026-08)
 These do not add bounces; they stop the classifier from inventing verdicts when
-the bounces are missing. On tennis11 game 1 automatic winner inference went from
-2 correct / 4 wrong to 2 correct / 0 wrong / 4 abstained.
+the bounces are missing. With offline bounces and serve motions integrated,
+tennis11 game 1 automatic winner inference is 3 correct / 0 wrong / 3 abstained.
 - Physical invariant: a serve crosses the net, so it cannot bounce on the
   server's own side. Such a bounce now yields `not_a_serve`, and a point whose
   first bounce is on the server's side reports `serve_unobserved` instead of
