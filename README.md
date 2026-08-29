@@ -418,10 +418,10 @@ That check found a live instance in the serve path.
 
 Ball-track recall is the bottleneck for full automation
 - Offline bounce detection substantially improves recall on the existing logs:
-  tennis11 game 1 now finds 44 bounces instead of the live tracker's 10, and 6/7
-  serve landings are found under the loose contact-window metric. The remaining
-  failures are mostly not downstream logic failures; they happen where the input
-  ball track loses the ball at the critical instant.
+  tennis11 game 1 now finds 44 bounces instead of the live tracker's 10, and
+  serve landings are found at 6/7 loose, 5/7 strict. The remaining failures are
+  mostly not downstream logic failures; they happen where the input ball track
+  loses the ball at the critical instant.
 - The limiting measurement is now the distinct real observation rate, not the
   raw number of frames with a ball. On tennis11 game 1 the tracker reports a
   ball on 62.8% of frames, but after held/coasted repeats only 56.8% are distinct
