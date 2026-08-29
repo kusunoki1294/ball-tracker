@@ -29,7 +29,11 @@ Current status
     line-model fit, 0.4px)
   - tracking: `yoloVids/outputs/tennis11/ai11.1.{avi,jsonl}`
   - annotated render: `yoloVids/outputs/tennis11/tennis11_game1_annotated.mp4`
+  - automated timeline demo: `yoloVids/outputs/tennis11/timeline/timeline_demo.html`
   - hypothesis audit: `yoloVids/outputs/tennis11/timeline/timeline_audit.html`
+  - hypothesis review videos:
+    `yoloVids/outputs/tennis11/timeline/game1_timeline_hypotheses.mp4`,
+    `yoloVids/outputs/tennis11/timeline/game2_timeline_hypotheses.mp4`
   - Scoring reproduces the real game exactly (0-15, 15-15, 15-30, 30-30, 40-30,
     game) from manual `point_winners`. Offline bounce detection and serve-motion
     detection are now integrated for this clip; automatic winner inference is
