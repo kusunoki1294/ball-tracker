@@ -74,16 +74,18 @@ def validate_outputs(output_dir):
     clips = {clip["label"]: clip for clip in audit.get("clips", [])}
     expected = {
         "game 1": {
-            "point_hypotheses": 12,
+            "point_hypotheses": 8,
             "high_confidence_hypotheses": 1,
             "serve_motions": 13,
+            "suppressed_rally_motions": 4,
             "contact_recall": 1.0,
             "contact_precision": 0.538,
         },
         "game 2": {
-            "point_hypotheses": 17,
-            "high_confidence_hypotheses": 6,
+            "point_hypotheses": 9,
+            "high_confidence_hypotheses": 5,
             "serve_motions": 17,
+            "suppressed_rally_motions": 8,
             "contact_evaluation": None,
         },
     }
@@ -93,7 +95,12 @@ def validate_outputs(output_dir):
             errors.append(f"missing clip {label!r} in timeline audit JSON")
             continue
         summary = clip.get("summary") or {}
-        for key in ("point_hypotheses", "high_confidence_hypotheses", "serve_motions"):
+        for key in (
+            "point_hypotheses",
+            "high_confidence_hypotheses",
+            "serve_motions",
+            "suppressed_rally_motions",
+        ):
             if summary.get(key) != expected_values[key]:
                 errors.append(
                     f"{label}: expected {key}={expected_values[key]}, got {summary.get(key)}"

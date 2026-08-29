@@ -159,7 +159,9 @@ def draw_panel(frame, hypothesis, frame_index, total_frames):
     )
     line2 = (
         f"serves(hypothesis)={hypothesis.get('serve_count')}  "
-        f"first_contact=f{first.get('contact_frame')}  landing={landing}"
+        f"first_contact=f{first.get('contact_frame')}  "
+        f"suppressed_rally={hypothesis.get('suppressed_rally_motion_count', 0)}  "
+        f"landing={landing}"
     )
     review = ", ".join(hypothesis.get("review_reasons") or [])
     line3 = "review: " + (review if review else "none")

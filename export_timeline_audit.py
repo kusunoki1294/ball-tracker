@@ -85,6 +85,7 @@ def hypothesis_rows(data):
             "<td class='num'>{serves}</td>"
             "<td class='num'>f{contact}</td>"
             "<td>{landing}</td>"
+            "<td class='num'>{suppressed}</td>"
             "<td class='num'>{dead}</td>"
             "<td class='num'>{spans}</td>"
             "<td class='reasons'>{reasons}</td>"
@@ -101,6 +102,7 @@ def hypothesis_rows(data):
                 serves=esc(hypothesis.get("serve_count")),
                 contact=esc(first.get("contact_frame")),
                 landing=esc(landing_summary(hypothesis)),
+                suppressed=esc(hypothesis.get("suppressed_rally_motion_count", 0)),
                 dead=esc(isolation.get("dead_frames_before")),
                 spans=esc(fragmentation.get("nearby_activity_spans")),
                 reasons=format_list(hypothesis.get("reasons")),
@@ -144,6 +146,7 @@ def clip_section(clip):
     <div><span class='k'>high confidence</span><span class='v'>{esc(summary.get('high_confidence_hypotheses'))}</span></div>
     <div><span class='k'>uncertain</span><span class='v'>{esc(summary.get('uncertain_hypotheses'))}</span></div>
     <div><span class='k'>serve motions</span><span class='v'>{esc(summary.get('serve_motions'))}</span></div>
+    <div><span class='k'>suppressed rally motions</span><span class='v'>{esc(summary.get('suppressed_rally_motions', 0))}</span></div>
     <div><span class='k'>activity spans</span><span class='v'>{esc(summary.get('activity_spans'))}</span></div>
     <div><span class='k'>distinct real observations</span><span class='v'>{esc(summary.get('distinct_real_observations_pct'))}%</span></div>
   </div>
@@ -152,7 +155,7 @@ def clip_section(clip):
     <thead><tr>
       <th>hypothesis</th><th>frames</th><th>confidence</th><th>server</th>
       <th>serves<sup>†</sup></th><th>first contact</th><th>serve landing</th>
-      <th>dead frames before</th><th>nearby spans</th><th>reasons</th><th>review reasons</th>
+      <th>suppressed rally motions</th><th>dead frames before</th><th>nearby spans</th><th>reasons</th><th>review reasons</th>
     </tr></thead>
     <tbody>
 {hypothesis_rows(data)}
@@ -172,6 +175,7 @@ def comparison_section(clips):
         ("high confidence", "high_confidence_hypotheses"),
         ("uncertain", "uncertain_hypotheses"),
         ("serve motions", "serve_motions"),
+        ("suppressed rally motions", "suppressed_rally_motions"),
         ("activity spans", "activity_spans"),
         ("frames with a ball %", "frames_with_ball_pct"),
         ("distinct real observations %", "distinct_real_observations_pct"),

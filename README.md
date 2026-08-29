@@ -392,7 +392,8 @@ The automated path deliberately stops short of scoring. It turns tracked JSONL
 logs into point-like hypotheses, then exports a report that keeps uncertainty
 visible: confidence is clip-relative, `serve_count` is a hypothesis, point ends
 are inferred from activity rather than observed, and the compact JSON is marked
-`not_scoring_truth: true`.
+`not_scoring_truth: true`. Serve-like motions seen inside an active rally are
+suppressed as review evidence instead of emitted as new point starts.
 
 One command regenerates the current tennis11 hypothesis audit from the tracked
 game-1 and game-2 logs:

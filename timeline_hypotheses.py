@@ -26,6 +26,7 @@ MAX_SERVE_FLIGHT_SECONDS = 1.5
 MIN_SERVE_FLIGHT_SECONDS = 0.33
 NET_LINE_CONTACT_BAND_FT = 2.0
 SECOND_SERVE_MIN_TRACKED_SECONDS = 2.0
+RALLY_CONTINUATION_SUPPRESS_SECONDS = 15.0
 
 
 def read_tracking_log(path):
@@ -512,6 +513,7 @@ def build_hypotheses(
 
     grouped = []
     max_second_gap = frame_window(MAX_SECOND_SERVE_GAP_SECONDS, fps)
+    max_rally_continuation_gap = frame_window(RALLY_CONTINUATION_SUPPRESS_SECONDS, fps)
     for point in raw_points:
         attempt = point["attempts"][0]
         if grouped:
@@ -530,6 +532,22 @@ def build_hypotheses(
             enough_track = second_serve_evidence["enough_ball_track"]
             rally_between = second_serve_evidence["rally_between_serves"]
             has_tracked_toss = attempt.get("source") == "ball_toss"
+            previous_can_still_be_rally = (
+                len(previous["attempts"]) == 1
+                and previous_attempt["landing"]["result"] in {"in", "unknown"}
+            )
+            if (
+                previous_can_still_be_rally
+                and gap <= max_rally_continuation_gap
+                and enough_track
+                and rally_between is True
+            ):
+                attempt.setdefault("review_reasons", []).append(
+                    "suppressed_rally_motion_not_point_start"
+                )
+                attempt["previous_motion_evidence"] = second_serve_evidence
+                previous.setdefault("suppressed_rally_motions", []).append(attempt)
+                continue
             if (
                 same_server
                 and can_have_second
@@ -587,7 +605,9 @@ def build_hypotheses(
         review_reasons = sorted(
             {
                 reason
-                for attempt in point["attempts"]
+                for attempt in (
+                    point["attempts"] + point.get("suppressed_rally_motions", [])
+                )
                 for reason in attempt.get("review_reasons", [])
             }
         )
@@ -604,11 +624,13 @@ def build_hypotheses(
                 "review_reasons": review_reasons,
                 "ends_have_no_truth": True,
                 "serve_count": len(point["attempts"]),
+                "suppressed_rally_motion_count": len(point.get("suppressed_rally_motions", [])),
                 "serve_corroborated": any(attempt["landing"]["bounce_id"] for attempt in point["attempts"]),
                 "landing_in_box": any(attempt["landing"]["result"] == "in" for attempt in point["attempts"]),
                 "isolation": isolation,
                 "local_fragmentation": fragmentation,
                 "attempts": point["attempts"],
+                "suppressed_rally_motions": point.get("suppressed_rally_motions", []),
             }
         )
 
@@ -628,6 +650,9 @@ def build_hypotheses(
             **stats,
             "activity_spans": len(spans),
             "serve_motions": len(motions),
+            "suppressed_rally_motions": sum(
+                len(item.get("suppressed_rally_motions", [])) for item in hypotheses
+            ),
             "point_hypotheses": len(hypotheses),
             "high_confidence_hypotheses": sum(1 for item in hypotheses if item["confidence"] == "high"),
             "uncertain_hypotheses": sum(1 for item in hypotheses if item["confidence"] == "uncertain"),
