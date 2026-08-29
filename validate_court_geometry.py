@@ -1,4 +1,7 @@
-"""Validate shared court geometry against the previous OpenCV projection path."""
+"""Validate shared court geometry against the previous OpenCV projection path.
+
+Run this with `.venv/bin/python`; the comparison path imports OpenCV.
+"""
 
 import glob
 import json

@@ -415,6 +415,10 @@ Outputs:
 - Configured hypothesis overlay MP4s when `--render-videos` is passed.
 - `tennis11_timeline_demo.zip` when `--bundle-demo` is passed.
 
+The zip is the shareable demo unit. The loose HTML uses relative links to the
+MP4 files beside it, so sending `timeline_demo.html` by itself will produce
+broken video players.
+
 The optional manifest and expected-contact inputs are evaluation only. They do
 not feed scoring and do not create manifest-shaped `point_frames`. Game 1 has
 verified serve contacts, so the report can show contact recall/precision. Game 2

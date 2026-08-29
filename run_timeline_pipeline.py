@@ -236,10 +236,10 @@ def write_demo_index(path, title, report_clips, audit_html, audit_json, rendered
             "<tr>"
             f"<td>{html.escape(label)}</td>"
             f"<td>{summary.get('point_hypotheses', '')}</td>"
-            f"<td>{summary.get('high_confidence_hypotheses', '')}</td>"
-            f"<td>{summary.get('serve_motions', '')}</td>"
             f"<td>{summary.get('distinct_real_observations_pct', '')}%</td>"
+            f"<td>{summary.get('high_confidence_hypotheses', '')}</td>"
             f"<td>{summary.get('activity_spans', '')}</td>"
+            f"<td>{summary.get('serve_motions', '')}</td>"
             f"<td>{html.escape(contact)}</td>"
             f"<td><a href=\"{html.escape(rel_link(clip['path'], base_dir))}\">hypotheses JSON</a></td>"
             f"<td>{video_link}</td>"
@@ -280,10 +280,10 @@ def write_demo_index(path, title, report_clips, audit_html, audit_json, rendered
       <tr>
         <th>Clip</th>
         <th>Hypotheses</th>
-        <th>High</th>
-        <th>Serve Motions</th>
         <th>Observed</th>
+        <th>High, Clip-Relative</th>
         <th>Activity Spans</th>
+        <th>Serve Motions</th>
         <th>Contact Evaluation</th>
         <th>Data</th>
         <th>Video</th>
@@ -293,6 +293,11 @@ def write_demo_index(path, title, report_clips, audit_html, audit_json, rendered
       {''.join(rows)}
     </tbody>
   </table>
+  <p>
+    <strong>Read observed track quality beside confidence.</strong>
+    A clip can show more high-confidence hypotheses while being worse tracked;
+    confidence is useful within a clip, not as a cross-clip quality score.
+  </p>
   <div class="videos">
     {''.join(video_sections)}
   </div>
