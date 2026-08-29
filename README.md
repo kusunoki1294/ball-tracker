@@ -394,12 +394,7 @@ One command regenerates the current tennis11 hypothesis audit from the tracked
 game-1 and game-2 logs:
 
     python run_timeline_pipeline.py \
-      --clip "game 1=yoloVids/outputs/tennis11/ai11.1.jsonl" \
-      --clip "game 2=yoloVids/outputs/tennis11/ai11.g2.jsonl" \
-      --court-calib-file yoloVids/calibration/court_calib_tennis11.json \
-      --out-dir yoloVids/outputs/tennis11/timeline \
-      --expected-contact-frames "game 1=159,635,1485,1659,2091,2432,2952" \
-      --manifest "game 1=manifests/tennis11_game1_manifest.json"
+      --config timeline_configs/tennis11_games1_2.json
 
 Outputs:
 - `<label>_hypotheses.json` for each clip.

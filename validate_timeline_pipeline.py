@@ -13,11 +13,7 @@ import sys
 import tempfile
 
 
-GAME1_JSONL = "yoloVids/outputs/tennis11/ai11.1.jsonl"
-GAME2_JSONL = "yoloVids/outputs/tennis11/ai11.g2.jsonl"
-COURT_CALIB = "yoloVids/calibration/court_calib_tennis11.json"
-GAME1_MANIFEST = "manifests/tennis11_game1_manifest.json"
-GAME1_CONTACTS = "159,635,1485,1659,2091,2432,2952"
+TIMELINE_CONFIG = "timeline_configs/tennis11_games1_2.json"
 
 
 def pipeline_python():
@@ -50,18 +46,10 @@ def validate_outputs(output_dir):
         [
             pipeline_python(),
             "run_timeline_pipeline.py",
-            "--clip",
-            f"game 1={GAME1_JSONL}",
-            "--clip",
-            f"game 2={GAME2_JSONL}",
-            "--court-calib-file",
-            COURT_CALIB,
+            "--config",
+            TIMELINE_CONFIG,
             "--out-dir",
             output_dir,
-            "--expected-contact-frames",
-            f"game 1={GAME1_CONTACTS}",
-            "--manifest",
-            f"game 1={GAME1_MANIFEST}",
         ]
     )
     audit_path = os.path.join(output_dir, "timeline_audit.json")

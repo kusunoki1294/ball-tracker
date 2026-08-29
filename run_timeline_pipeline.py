@@ -48,14 +48,19 @@ def parse_label_value(raw, flag_name):
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--config",
+        default="",
+        help="Optional non-scoring timeline pipeline config JSON.",
+    )
+    parser.add_argument(
         "--clip",
         action="append",
-        required=True,
+        default=[],
         metavar="LABEL=JSONL",
         help="Tracked JSONL log to process. Repeat for comparison reports.",
     )
-    parser.add_argument("--court-calib-file", required=True, help="Court calibration JSON.")
-    parser.add_argument("--out-dir", required=True, help="Directory for generated timeline outputs.")
+    parser.add_argument("--court-calib-file", default="", help="Court calibration JSON.")
+    parser.add_argument("--out-dir", default="", help="Directory for generated timeline outputs.")
     parser.add_argument("--fps", type=float, default=FPS_DEFAULT)
     parser.add_argument("--title", default="Timeline Hypothesis Audit")
     parser.add_argument(
@@ -78,6 +83,67 @@ def parse_args():
     parser.add_argument("--scan-window-seconds", type=float, default=15.0)
     parser.add_argument("--scan-step-seconds", type=float, default=5.0)
     return parser.parse_args()
+
+
+def load_config(path):
+    if not path:
+        return {}
+    with open(path, "r", encoding="utf-8") as handle:
+        config = json.load(handle)
+    if not isinstance(config, dict):
+        raise ValueError("--config must point to a JSON object")
+    return config
+
+
+def configured_args(args, config):
+    for field in (
+        "court_calib_file",
+        "out_dir",
+        "title",
+        "fps",
+        "contact_tolerance_frames",
+        "activity_gap_seconds",
+        "span_pad_seconds",
+        "scan_window_seconds",
+        "scan_step_seconds",
+    ):
+        value = config.get(field)
+        if value is not None and getattr(args, field) in ("", None):
+            setattr(args, field, value)
+        elif value is not None and field == "title" and args.title == "Timeline Hypothesis Audit":
+            setattr(args, field, value)
+        elif value is not None and field in {"fps", "contact_tolerance_frames"}:
+            # Numeric argparse defaults are indistinguishable from explicit CLI
+            # values; the config is the intended source for config-driven runs.
+            setattr(args, field, value)
+        elif value is not None and field.endswith("_seconds"):
+            setattr(args, field, value)
+    if not args.court_calib_file:
+        raise ValueError("court calibration is required via --court-calib-file or config")
+    if not args.out_dir:
+        raise ValueError("output directory is required via --out-dir or config")
+    return args
+
+
+def config_entries(config):
+    clips = []
+    manifests = {}
+    contacts = {}
+    for item in config.get("clips") or []:
+        label = item.get("label")
+        jsonl = item.get("jsonl")
+        if not label or not jsonl:
+            raise ValueError("each config clip must define label and jsonl")
+        clips.append((label, jsonl))
+        if item.get("evaluation_manifest"):
+            manifests[label] = item["evaluation_manifest"]
+        if item.get("expected_contact_frames"):
+            raw_contacts = item["expected_contact_frames"]
+            if isinstance(raw_contacts, list):
+                contacts[label] = [int(frame) for frame in raw_contacts]
+            else:
+                contacts[label] = parse_contact_frames(str(raw_contacts))
+    return clips, manifests, contacts
 
 
 def output_stem(label):
@@ -135,17 +201,27 @@ def run_clip(label, jsonl_path, args, manifests, expected_contacts):
 
 def main():
     args = parse_args()
-    clips = [parse_label_path(raw, "--clip") for raw in args.clip]
+    config = load_config(args.config)
+    args = configured_args(args, config)
+    config_clips, config_manifests, config_contacts = config_entries(config)
+
+    clips = config_clips + [parse_label_path(raw, "--clip") for raw in args.clip]
+    if not clips:
+        raise ValueError("at least one clip is required via --clip or config")
     labels = [label for label, _ in clips]
     if len(labels) != len(set(labels)):
         raise ValueError("clip labels must be unique")
 
-    manifests = build_lookup(args.manifest, lambda value: value, "--manifest")
+    manifests = {
+        **config_manifests,
+        **build_lookup(args.manifest, lambda value: value, "--manifest"),
+    }
     expected_contacts = build_lookup(
         args.expected_contact_frames,
         parse_contact_frames,
         "--expected-contact-frames",
     )
+    expected_contacts = {**config_contacts, **expected_contacts}
     unknown_labels = (set(manifests) | set(expected_contacts)) - set(labels)
     if unknown_labels:
         raise ValueError(
