@@ -411,6 +411,14 @@ not feed scoring and do not create manifest-shaped `point_frames`. Game 1 has
 verified serve contacts, so the report can show contact recall/precision. Game 2
 has no ground truth and is labelled that way instead of showing blank metrics.
 
+Validate the timeline path:
+
+    python validate_timeline_pipeline.py
+
+This check protects the automation boundary: importing the runner must not load
+the scoring/tracker stacks, the compact audit must carry `not_scoring_truth:
+true`, and no generated JSON may contain `point_frames`.
+
 `eval_bounce_detect.py` also reports an ANCHORING HAZARD: detections closer to a
 serve strike than the minimum flight time. Those are the strike itself, and a
 consumer that takes the first bounce after a strike will judge the serve on it.

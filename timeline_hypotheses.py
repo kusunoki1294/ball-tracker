@@ -2,10 +2,6 @@ import argparse
 import json
 import os
 
-import cv2
-import numpy as np
-
-from bounce_detect import detect_bounces
 from serve_detect import (
     MAX_SECOND_SERVE_GAP_SECONDS,
     RALLY_BALL_RETURN_FRACTION,
@@ -133,16 +129,48 @@ def load_court_calibration(path):
 def build_inverse_court_homography(court_calib):
     if not court_calib or court_calib.get("points") is None:
         return None
-    world = np.array(
-        [[0.0, 78.0], [36.0, 78.0], [36.0, 0.0], [0.0, 0.0]],
-        dtype=np.float32,
-    )
-    image = np.array(court_calib["points"], dtype=np.float32)
-    homography = cv2.getPerspectiveTransform(world, image)
-    try:
-        return np.linalg.inv(homography)
-    except np.linalg.LinAlgError:
+    image = court_calib["points"]
+    world = [(0.0, 78.0), (36.0, 78.0), (36.0, 0.0), (0.0, 0.0)]
+    return projective_transform(image, world)
+
+
+def projective_transform(source_points, target_points):
+    rows = []
+    values = []
+    for (x, y), (u, v) in zip(source_points, target_points):
+        rows.append([x, y, 1.0, 0.0, 0.0, 0.0, -u * x, -u * y])
+        values.append(u)
+        rows.append([0.0, 0.0, 0.0, x, y, 1.0, -v * x, -v * y])
+        values.append(v)
+    solved = solve_linear_system(rows, values)
+    if solved is None:
         return None
+    a, b, c, d, e, f, g, h = solved
+    return ((a, b, c), (d, e, f), (g, h, 1.0))
+
+
+def solve_linear_system(rows, values):
+    matrix = [list(row) + [value] for row, value in zip(rows, values)]
+    size = len(values)
+    for col in range(size):
+        pivot = max(range(col, size), key=lambda row: abs(matrix[row][col]))
+        if abs(matrix[pivot][col]) < 1e-12:
+            return None
+        if pivot != col:
+            matrix[col], matrix[pivot] = matrix[pivot], matrix[col]
+        divisor = matrix[col][col]
+        matrix[col] = [value / divisor for value in matrix[col]]
+        for row in range(size):
+            if row == col:
+                continue
+            factor = matrix[row][col]
+            if factor == 0.0:
+                continue
+            matrix[row] = [
+                current - factor * pivot_value
+                for current, pivot_value in zip(matrix[row], matrix[col])
+            ]
+    return [matrix[row][-1] for row in range(size)]
 
 
 def parse_args():
@@ -334,6 +362,8 @@ def dedupe_motions(motions, fps):
 
 
 def detector_bounces(rows, court_calib_file):
+    from bounce_detect import detect_bounces
+
     with open(court_calib_file, "r", encoding="utf-8") as handle:
         calib_points = json.load(handle)["points"]
     bounces = detect_bounces(rows, calib_points)

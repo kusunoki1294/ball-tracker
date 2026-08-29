@@ -50,10 +50,6 @@ Handedness does not matter: nothing here reads stroke side, only the toss and
 the box.
 """
 
-import cv2
-import numpy as np
-
-
 NEAR_BASELINE_FT = 78.0
 FAR_BASELINE_FT = 0.0
 COURT_NET_Y_FT = 39.0
@@ -140,9 +136,14 @@ def ball_contact_point(ball):
 def project_to_court_world(center, inv_homography):
     if center is None or inv_homography is None:
         return None
-    point = np.array([[center]], dtype=np.float32)
-    world = cv2.perspectiveTransform(point, inv_homography)[0][0]
-    return float(world[0]), float(world[1])
+    x, y = center
+    h = inv_homography
+    denom = (h[2][0] * x) + (h[2][1] * y) + h[2][2]
+    if abs(denom) < 1e-12:
+        return None
+    world_x = ((h[0][0] * x) + (h[0][1] * y) + h[0][2]) / denom
+    world_y = ((h[1][0] * x) + (h[1][1] * y) + h[1][2]) / denom
+    return float(world_x), float(world_y)
 
 
 def _player_key(side):
