@@ -396,10 +396,17 @@ game-1 and game-2 logs:
     python run_timeline_pipeline.py \
       --config timeline_configs/tennis11_games1_2.json
 
+Add `--render-videos` to also create the configured review MP4:
+
+    .venv/bin/python run_timeline_pipeline.py \
+      --config timeline_configs/tennis11_games1_2.json \
+      --render-videos
+
 Outputs:
 - `<label>_hypotheses.json` for each clip.
 - `timeline_audit.html` for human review.
 - `timeline_audit.json` for a compact machine-readable audit.
+- Configured hypothesis overlay MP4s when `--render-videos` is passed.
 
 The optional manifest and expected-contact inputs are evaluation only. They do
 not feed scoring and do not create manifest-shaped `point_frames`. Game 1 has

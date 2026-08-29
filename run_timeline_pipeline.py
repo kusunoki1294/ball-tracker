@@ -82,6 +82,17 @@ def parse_args():
     parser.add_argument("--span-pad-seconds", type=float, default=1.5)
     parser.add_argument("--scan-window-seconds", type=float, default=15.0)
     parser.add_argument("--scan-step-seconds", type=float, default=5.0)
+    parser.add_argument(
+        "--render-videos",
+        action="store_true",
+        help="Render configured hypothesis overlay videos after writing JSON/HTML outputs.",
+    )
+    parser.add_argument(
+        "--render-max-frames",
+        type=int,
+        default=0,
+        help="Optional frame limit for rendered videos, useful for smoke checks.",
+    )
     return parser.parse_args()
 
 
@@ -129,6 +140,7 @@ def config_entries(config):
     clips = []
     manifests = {}
     contacts = {}
+    renders = {}
     for item in config.get("clips") or []:
         label = item.get("label")
         jsonl = item.get("jsonl")
@@ -143,7 +155,12 @@ def config_entries(config):
                 contacts[label] = [int(frame) for frame in raw_contacts]
             else:
                 contacts[label] = parse_contact_frames(str(raw_contacts))
-    return clips, manifests, contacts
+        if item.get("video"):
+            renders[label] = {
+                "video": item["video"],
+                "output": item.get("render_output") or f"{output_stem(label)}_timeline_hypotheses.mp4",
+            }
+    return clips, manifests, contacts, renders
 
 
 def output_stem(label):
@@ -199,11 +216,27 @@ def run_clip(label, jsonl_path, args, manifests, expected_contacts):
     return result
 
 
+def render_clip_video(label, hypothesis_path, render_config, args):
+    from render_timeline_hypotheses import render_video
+
+    output = render_config["output"]
+    if not os.path.isabs(output):
+        output = os.path.join(args.out_dir, output)
+    render_video(
+        render_config["video"],
+        hypothesis_path,
+        output,
+        max_frames=args.render_max_frames,
+    )
+    print(f"wrote {output}")
+    return output
+
+
 def main():
     args = parse_args()
     config = load_config(args.config)
     args = configured_args(args, config)
-    config_clips, config_manifests, config_contacts = config_entries(config)
+    config_clips, config_manifests, config_contacts, config_renders = config_entries(config)
 
     clips = config_clips + [parse_label_path(raw, "--clip") for raw in args.clip]
     if not clips:
@@ -237,6 +270,8 @@ def main():
         print(f"wrote {hypothesis_path}")
         print_summary(result)
         report_clips.append({"label": label, "path": hypothesis_path, "data": result})
+        if args.render_videos and label in config_renders:
+            render_clip_video(label, hypothesis_path, config_renders[label], args)
 
     audit_html = os.path.join(args.out_dir, "timeline_audit.html")
     audit_json = os.path.join(args.out_dir, "timeline_audit.json")

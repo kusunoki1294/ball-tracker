@@ -198,22 +198,21 @@ def draw_contact_events(frame, events, frame_index):
         draw_text(frame, fit_text(text, 90), (28, y), 0.55, confidence_color(hypothesis.get("confidence")), 2)
 
 
-def main():
-    args = parse_args()
-    data = load_json(args.hypotheses)
+def render_video(video_path, hypotheses_path, output_path, max_frames=0):
+    data = load_json(hypotheses_path)
     hypotheses = data.get("hypotheses") or []
     events = attempts_by_frame(hypotheses)
 
-    cap = cv2.VideoCapture(args.video)
+    cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        raise RuntimeError(f"Could not open video: {args.video}")
+        raise RuntimeError(f"Could not open video: {video_path}")
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 0
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 0
     fps = cap.get(cv2.CAP_PROP_FPS) or data.get("fps") or 30.0
     video_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
     hypothesis_frames = int(data.get("frame_range", {}).get("end_frame") or 0)
     total_frames = max(video_frames, hypothesis_frames, 1)
-    writer_path, mp4_output = render_target(args.output)
+    writer_path, mp4_output = render_target(output_path)
     writer = open_writer(writer_path, width, height, fps)
     if writer is None:
         raise RuntimeError(f"Could not open output writer: {writer_path}")
@@ -230,7 +229,7 @@ def main():
             draw_contact_events(frame, events, frame_index)
             draw_timeline(frame, hypotheses, frame_index, total_frames)
             writer.write(frame)
-            if args.max_frames and frame_index >= args.max_frames:
+            if max_frames and frame_index >= max_frames:
                 break
     finally:
         cap.release()
@@ -241,7 +240,12 @@ def main():
         finally:
             if os.path.exists(writer_path):
                 os.remove(writer_path)
-    print(f"wrote {args.output} ({frame_index} frames)")
+    print(f"rendered {output_path} ({frame_index} frames)")
+
+
+def main():
+    args = parse_args()
+    render_video(args.video, args.hypotheses, args.output, args.max_frames)
 
 
 if __name__ == "__main__":

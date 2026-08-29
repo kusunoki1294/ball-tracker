@@ -7,6 +7,8 @@
     {
       "label": "game 1",
       "jsonl": "yoloVids/outputs/tennis11/ai11.1.jsonl",
+      "video": "yoloVids/inputs/tennis11_game1_clean.avi",
+      "render_output": "game1_timeline_hypotheses.mp4",
       "evaluation_manifest": "manifests/tennis11_game1_manifest.json",
       "expected_contact_frames": [159, 635, 1485, 1659, 2091, 2432, 2952]
     },
