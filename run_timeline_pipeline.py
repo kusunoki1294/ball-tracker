@@ -11,13 +11,14 @@ import json
 import os
 import sys
 
-from analyze_tennis_events import FPS_DEFAULT, read_tracking_log
 from export_timeline_audit import build_html, compact_data
 from timeline_hypotheses import (
+    FPS_DEFAULT,
     build_hypotheses,
     evaluate_against_manifest,
     evaluate_contacts,
     parse_contact_frames,
+    read_tracking_log,
     print_summary,
 )
 

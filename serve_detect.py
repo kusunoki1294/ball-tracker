@@ -50,7 +50,8 @@ Handedness does not matter: nothing here reads stroke side, only the toss and
 the box.
 """
 
-from track_ball_yolo import ball_contact_point, project_to_court_world
+import cv2
+import numpy as np
 
 
 NEAR_BASELINE_FT = 78.0
@@ -121,6 +122,27 @@ FPS_DEFAULT = 30.0
 def frame_window(seconds, fps):
     """Convert a measured duration into a whole number of frames."""
     return max(1, int(round(seconds * (fps or FPS_DEFAULT))))
+
+
+def ball_contact_point(ball):
+    if not ball:
+        return None
+    bbox = ball.get("bbox")
+    if isinstance(bbox, list) and len(bbox) == 4:
+        x1, _y1, x2, y2 = bbox
+        return (float(x1 + x2) / 2.0, float(y2))
+    center = ball.get("center")
+    if isinstance(center, list) and len(center) == 2:
+        return (float(center[0]), float(center[1]))
+    return None
+
+
+def project_to_court_world(center, inv_homography):
+    if center is None or inv_homography is None:
+        return None
+    point = np.array([[center]], dtype=np.float32)
+    world = cv2.perspectiveTransform(point, inv_homography)[0][0]
+    return float(world[0]), float(world[1])
 
 
 def _player_key(side):

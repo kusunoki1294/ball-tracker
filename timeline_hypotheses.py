@@ -2,14 +2,9 @@ import argparse
 import json
 import os
 
-from analyze_tennis_events import (
-    FPS_DEFAULT,
-    bounce_after_serve_contact,
-    parse_point_ranges,
-    read_tracking_log,
-    side_opponent,
-    world_point_in_receiver_service_box,
-)
+import cv2
+import numpy as np
+
 from bounce_detect import detect_bounces
 from serve_detect import (
     MAX_SECOND_SERVE_GAP_SECONDS,
@@ -20,10 +15,134 @@ from serve_detect import (
     detect_serve_motions_for_point,
     frame_window,
 )
-from track_ball_yolo import build_inverse_court_homography, load_court_calibration
 
 
+FPS_DEFAULT = 30.0
+COURT_NET_Y_FT = 39.0
+SINGLES_LEFT_FT = 4.5
+SINGLES_RIGHT_FT = 31.5
+FAR_SERVICE_Y_MIN_FT = 18.0
+FAR_SERVICE_Y_MAX_FT = 39.0
+NEAR_SERVICE_Y_MIN_FT = 39.0
+NEAR_SERVICE_Y_MAX_FT = 60.0
+MAX_SERVE_FLIGHT_SECONDS = 1.5
+MIN_SERVE_FLIGHT_SECONDS = 0.33
+NET_LINE_CONTACT_BAND_FT = 2.0
 SECOND_SERVE_MIN_TRACKED_SECONDS = 2.0
+
+
+def read_tracking_log(path):
+    rows = []
+    by_frame = {}
+    with open(path, "r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            frame = int(row["frame"])
+            rows.append(row)
+            by_frame[frame] = row
+    rows.sort(key=lambda row: row["frame"])
+    return rows, by_frame
+
+
+def parse_point_ranges(raw):
+    ranges = []
+    if not raw:
+        return ranges
+    for token in raw.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if "-" not in token:
+            frame = int(token)
+            ranges.append({"start_frame": frame, "end_frame": frame})
+            continue
+        start, end = token.split("-", 1)
+        ranges.append({"start_frame": int(start), "end_frame": int(end)})
+    return ranges
+
+
+def side_opponent(side):
+    return "near" if side == "far" else "far"
+
+
+def service_box_for_receiver(receiver):
+    if receiver == "near":
+        return {
+            "y_min": NEAR_SERVICE_Y_MIN_FT,
+            "y_max": NEAR_SERVICE_Y_MAX_FT,
+        }
+    return {
+        "y_min": FAR_SERVICE_Y_MIN_FT,
+        "y_max": FAR_SERVICE_Y_MAX_FT,
+    }
+
+
+def world_point_in_receiver_service_box(world_point, receiver, margin=0.35):
+    if not world_point:
+        return False
+    xw, yw = world_point
+    box = service_box_for_receiver(receiver)
+    return (
+        SINGLES_LEFT_FT - margin <= xw <= SINGLES_RIGHT_FT + margin
+        and box["y_min"] - margin <= yw <= box["y_max"] + margin
+    )
+
+
+def bounce_on_net_line(bounce):
+    world_point = bounce.get("world_point")
+    if not world_point:
+        return False
+    return abs(world_point[1] - COURT_NET_Y_FT) <= NET_LINE_CONTACT_BAND_FT
+
+
+def bounce_after_serve_contact(point_bounces, contact_frame, used_bounce_ids, fps):
+    skipped_net_line = []
+    for bounce in point_bounces:
+        if bounce["frame"] <= contact_frame or bounce["id"] in used_bounce_ids:
+            continue
+        lag = bounce["frame"] - contact_frame
+        if lag > frame_window(MAX_SERVE_FLIGHT_SECONDS, fps):
+            return None, skipped_net_line
+        if lag < frame_window(MIN_SERVE_FLIGHT_SECONDS, fps):
+            continue
+        if bounce_on_net_line(bounce):
+            skipped_net_line.append(bounce["id"])
+            continue
+        return bounce, skipped_net_line
+    return None, skipped_net_line
+
+
+def load_court_calibration(path):
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+    points = data.get("points")
+    if not isinstance(points, list) or len(points) != 4:
+        return None
+    try:
+        court_points = [(float(x), float(y)) for x, y in points]
+    except Exception:
+        return None
+    return {"points": court_points}
+
+
+def build_inverse_court_homography(court_calib):
+    if not court_calib or court_calib.get("points") is None:
+        return None
+    world = np.array(
+        [[0.0, 78.0], [36.0, 78.0], [36.0, 0.0], [0.0, 0.0]],
+        dtype=np.float32,
+    )
+    image = np.array(court_calib["points"], dtype=np.float32)
+    homography = cv2.getPerspectiveTransform(world, image)
+    try:
+        return np.linalg.inv(homography)
+    except np.linalg.LinAlgError:
+        return None
 
 
 def parse_args():
