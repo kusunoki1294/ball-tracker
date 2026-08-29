@@ -193,6 +193,7 @@ def rel_link(path, base_dir):
 def write_demo_index(path, title, report_clips, audit_html, audit_json, rendered_videos):
     base_dir = os.path.dirname(path) or "."
     rows = []
+    video_sections = []
     for clip in report_clips:
         label = clip["label"]
         data = clip["data"]
@@ -210,6 +211,15 @@ def write_demo_index(path, title, report_clips, audit_html, audit_json, rendered
             if video
             else "not rendered"
         )
+        if video:
+            video_href = html.escape(rel_link(video, base_dir))
+            video_sections.append(
+                "<section class=\"clip-video\">"
+                f"<h2>{html.escape(label)}</h2>"
+                f"<video src=\"{video_href}\" controls preload=\"metadata\"></video>"
+                f"<p><a href=\"{video_href}\">Open {html.escape(label)} MP4</a></p>"
+                "</section>"
+            )
         rows.append(
             "<tr>"
             f"<td>{html.escape(label)}</td>"
@@ -233,6 +243,9 @@ def write_demo_index(path, title, report_clips, audit_html, audit_json, rendered
     table {{ border-collapse: collapse; min-width: 980px; }}
     th, td {{ border-bottom: 1px solid #d7dde5; padding: 10px 12px; text-align: left; vertical-align: top; }}
     th {{ background: #f3f6fa; font-weight: 650; }}
+    .videos {{ margin-top: 28px; display: grid; gap: 24px; max-width: 1180px; }}
+    .clip-video h2 {{ margin: 0 0 10px; font-size: 20px; }}
+    video {{ width: 100%; max-width: 1180px; background: #111; display: block; }}
     a {{ color: #0f65b7; }}
   </style>
 </head>
@@ -264,6 +277,9 @@ def write_demo_index(path, title, report_clips, audit_html, audit_json, rendered
       {''.join(rows)}
     </tbody>
   </table>
+  <div class="videos">
+    {''.join(video_sections)}
+  </div>
 </body>
 </html>
 """
