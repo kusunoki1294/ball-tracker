@@ -9,6 +9,13 @@ from collections import deque
 import cv2
 import numpy as np
 
+from court_geometry import (
+    ball_contact_point,
+    build_inverse_court_homography,
+    order_court_corners,
+    project_to_court_world,
+)
+
 try:
     from ultralytics import YOLO
 except Exception:
@@ -866,28 +873,6 @@ def average_point(points):
     return (x, y)
 
 
-def ball_contact_point(ball):
-    if not ball:
-        return None
-    bbox = ball.get("bbox")
-    if isinstance(bbox, list) and len(bbox) == 4:
-        x1, _y1, x2, y2 = bbox
-        return (float(x1 + x2) / 2.0, float(y2))
-    center = ball.get("center")
-    if isinstance(center, list) and len(center) == 2:
-        return (float(center[0]), float(center[1]))
-    return None
-
-
-def order_court_corners(points):
-    points = sorted(points, key=lambda p: p[1])
-    far = points[:2]
-    near = points[2:]
-    far_left, far_right = sorted(far, key=lambda p: p[0])
-    near_left, near_right = sorted(near, key=lambda p: p[0])
-    return [near_left, near_right, far_right, far_left]
-
-
 def get_mini_court_layout(frame_shape, size, margin):
     frame_h, frame_w = frame_shape[:2]
     court_len = 78.0
@@ -1027,22 +1012,6 @@ def load_court_calibration(path):
     return {"points": court_points, "net_points": net}
 
 
-def build_inverse_court_homography(court_calib):
-    if not court_calib or court_calib.get("points") is None:
-        return None
-    # Calibration points are stored as near-left, near-right, far-right, far-left.
-    # Map them to world coordinates with the far baseline at y=0 and the near
-    # baseline at y=78 so near/far classification and the mini-court share the
-    # same orientation.
-    world = np.array([[0.0, 78.0], [36.0, 78.0], [36.0, 0.0], [0.0, 0.0]], dtype=np.float32)
-    image = np.array(court_calib["points"], dtype=np.float32)
-    homography = cv2.getPerspectiveTransform(world, image)
-    try:
-        return np.linalg.inv(homography)
-    except np.linalg.LinAlgError:
-        return None
-
-
 def calibration_fits_frame(court_calib, frame_shape, margin_px=24):
     if not court_calib:
         return False
@@ -1090,14 +1059,6 @@ def calibration_plausible_for_frame(court_calib, frame_shape):
     if near_w <= far_w * 1.1:
         return False, f"near baseline ({near_w:.0f}px) not wider than far baseline ({far_w:.0f}px)"
     return True, ""
-
-
-def project_to_court_world(center, inv_homography):
-    if center is None or inv_homography is None:
-        return None
-    point = np.array([[center]], dtype=np.float32)
-    world = cv2.perspectiveTransform(point, inv_homography)[0][0]
-    return float(world[0]), float(world[1])
 
 
 def world_point_in_court(world_point, margin=0.0):

@@ -8,6 +8,8 @@ automated timeline hypotheses in context.
 import argparse
 import json
 import os
+import subprocess
+import tempfile
 
 import cv2
 
@@ -43,13 +45,53 @@ def load_json(path):
 
 def open_writer(path, width, height, fps):
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    for codec in ("MJPG", "mp4v", "avc1"):
+    ext = os.path.splitext(path)[1].lower()
+    codecs = ("MJPG", "mp4v", "avc1") if ext != ".mp4" else ("mp4v", "avc1", "MJPG")
+    for codec in codecs:
         fourcc = cv2.VideoWriter_fourcc(*codec)
         writer = cv2.VideoWriter(path, fourcc, fps, (width, height))
         if writer.isOpened():
             return writer
         writer.release()
     return None
+
+
+def render_target(output_path):
+    if os.path.splitext(output_path)[1].lower() != ".mp4":
+        return output_path, None
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    handle = tempfile.NamedTemporaryFile(
+        prefix=f".{os.path.basename(output_path)}.",
+        suffix=".avi",
+        dir=os.path.dirname(output_path) or ".",
+        delete=False,
+    )
+    handle.close()
+    return handle.name, output_path
+
+
+def transcode_to_mp4(source_path, output_path):
+    result = subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "error",
+            "-i",
+            source_path,
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            output_path,
+        ],
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg failed while writing {output_path}: {result.stderr.strip()}")
 
 
 def draw_text(frame, text, origin, scale=0.58, color=TEXT, thickness=1):
@@ -167,9 +209,10 @@ def main():
     video_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
     hypothesis_frames = int(data.get("frame_range", {}).get("end_frame") or 0)
     total_frames = max(video_frames, hypothesis_frames, 1)
-    writer = open_writer(args.output, width, height, fps)
+    writer_path, mp4_output = render_target(args.output)
+    writer = open_writer(writer_path, width, height, fps)
     if writer is None:
-        raise RuntimeError(f"Could not open output writer: {args.output}")
+        raise RuntimeError(f"Could not open output writer: {writer_path}")
 
     frame_index = 0
     try:
@@ -188,6 +231,12 @@ def main():
     finally:
         cap.release()
         writer.release()
+    if mp4_output:
+        try:
+            transcode_to_mp4(writer_path, mp4_output)
+        finally:
+            if os.path.exists(writer_path):
+                os.remove(writer_path)
     print(f"wrote {args.output} ({frame_index} frames)")
 
 

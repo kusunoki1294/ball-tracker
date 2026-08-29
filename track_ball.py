@@ -10,6 +10,8 @@ import threading
 import cv2
 import numpy as np
 
+from court_geometry import project_to_court_world
+
 try:
     from ultralytics import YOLO
 except Exception:
@@ -486,14 +488,6 @@ def contour_circularity(contour):
         return 0.0
     area = cv2.contourArea(contour)
     return (4.0 * np.pi * area) / (perimeter * perimeter)
-
-
-def project_to_court_world(center, inv_homography):
-    if center is None or inv_homography is None:
-        return None
-    pt = np.array([[center]], dtype=np.float32)
-    world = cv2.perspectiveTransform(pt, inv_homography)[0][0]
-    return float(world[0]), float(world[1])
 
 
 def world_point_in_court(world_pt, singles=True, margin=0.0):

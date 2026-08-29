@@ -409,23 +409,26 @@ has no ground truth and is labelled that way instead of showing blank metrics.
 Validate the timeline path:
 
     python validate_timeline_pipeline.py
+    .venv/bin/python validate_court_geometry.py
 
 This check protects the automation boundary: importing the runner must not load
 the scoring/tracker stacks, the compact audit must carry `not_scoring_truth:
-true`, and no generated JSON may contain `point_frames`.
+true`, and no generated JSON may contain `point_frames`. The geometry check
+protects the shared image-to-court projection against drifting from the previous
+OpenCV implementation.
 
 Render a hypothesis-only overlay video for visual review:
 
     .venv/bin/python render_timeline_hypotheses.py \
       --video yoloVids/inputs/tennis11_game1_clean.avi \
       --hypotheses yoloVids/outputs/tennis11/timeline/game_1_hypotheses.json \
-      --output yoloVids/outputs/tennis11/timeline/game1_timeline_hypotheses.avi
+      --output yoloVids/outputs/tennis11/timeline/game1_timeline_hypotheses.mp4
 
 The renderer also reads only timeline hypothesis JSON. It draws an explicit
 "not scoring truth" panel, active hypothesis details, serve contacts, review
-reasons, and a bottom timeline bar. On this OpenCV build, MJPEG AVI inputs read
-reliably while the game-2 H.264 MP4 does not; convert MP4 slices to MJPEG AVI
-before rendering if needed.
+reasons, and a bottom timeline bar. MP4 output is preferred for size; AVI is a
+fallback. On this OpenCV build, MJPEG AVI inputs read reliably while the game-2
+H.264 MP4 does not; convert MP4 slices to MJPEG AVI before rendering if needed.
 
 `eval_bounce_detect.py` also reports an ANCHORING HAZARD: detections closer to a
 serve strike than the minimum flight time. Those are the strike itself, and a
