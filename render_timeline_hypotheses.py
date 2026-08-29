@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 
 import cv2
+import numpy as np
 
 
 PANEL_BG = (20, 24, 28)
@@ -82,7 +83,7 @@ def transcode_to_mp4(source_path, output_path):
             "-c:v",
             "libx264",
             "-preset",
-            "veryfast",
+            "ultrafast",
             "-crf",
             "23",
             "-pix_fmt",
@@ -96,6 +97,107 @@ def transcode_to_mp4(source_path, output_path):
     )
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg failed while writing {output_path}: {result.stderr.strip()}")
+
+
+def probe_video(path):
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height,nb_frames,r_frame_rate",
+            "-of",
+            "json",
+            path,
+        ],
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"ffprobe failed for {path}: {result.stderr.strip()}")
+    data = json.loads(result.stdout)
+    streams = data.get("streams") or []
+    if not streams:
+        raise RuntimeError(f"ffprobe found no video stream in {path}")
+    stream = streams[0]
+    fps_text = stream.get("r_frame_rate") or "30/1"
+    numerator, _, denominator = fps_text.partition("/")
+    fps = float(numerator) / float(denominator or 1)
+    return {
+        "width": int(stream["width"]),
+        "height": int(stream["height"]),
+        "fps": fps,
+        "frames": int(stream.get("nb_frames") or 0),
+    }
+
+
+class FfmpegFrameReader:
+    def __init__(self, path):
+        self.path = path
+        self.info = probe_video(path)
+        self.width = self.info["width"]
+        self.height = self.info["height"]
+        self.fps = self.info["fps"]
+        self.frame_count = self.info["frames"]
+        self.frame_size = self.width * self.height * 3
+        self.process = subprocess.Popen(
+            [
+                "ffmpeg",
+                "-loglevel",
+                "error",
+                "-i",
+                path,
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "bgr24",
+                "-",
+            ],
+            stdout=subprocess.PIPE,
+        )
+
+    def read(self):
+        raw = self.process.stdout.read(self.frame_size)
+        if len(raw) != self.frame_size:
+            return False, None
+        frame = np.frombuffer(raw, dtype=np.uint8).reshape((self.height, self.width, 3)).copy()
+        return True, frame
+
+    def release(self):
+        if self.process.stdout:
+            self.process.stdout.close()
+        try:
+            self.process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            self.process.wait()
+
+
+class Cv2FrameReader:
+    def __init__(self, cap):
+        self.cap = cap
+        self.width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 0
+        self.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 0
+        self.fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        self.frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+
+    def read(self):
+        return self.cap.read()
+
+    def release(self):
+        self.cap.release()
+
+
+def open_frame_reader(video_path):
+    cap = cv2.VideoCapture(video_path)
+    if cap.isOpened():
+        return Cv2FrameReader(cap)
+    cap.release()
+    print(f"OpenCV could not open {video_path}; falling back to ffmpeg decoding")
+    return FfmpegFrameReader(video_path)
 
 
 def draw_text(frame, text, origin, scale=0.58, color=TEXT, thickness=1):
@@ -205,13 +307,11 @@ def render_video(video_path, hypotheses_path, output_path, max_frames=0):
     hypotheses = data.get("hypotheses") or []
     events = attempts_by_frame(hypotheses)
 
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        raise RuntimeError(f"Could not open video: {video_path}")
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 0
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 0
-    fps = cap.get(cv2.CAP_PROP_FPS) or data.get("fps") or 30.0
-    video_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+    reader = open_frame_reader(video_path)
+    width = reader.width
+    height = reader.height
+    fps = reader.fps or data.get("fps") or 30.0
+    video_frames = reader.frame_count
     hypothesis_frames = int(data.get("frame_range", {}).get("end_frame") or 0)
     total_frames = max(video_frames, hypothesis_frames, 1)
     writer_path, mp4_output = render_target(output_path)
@@ -222,7 +322,7 @@ def render_video(video_path, hypotheses_path, output_path, max_frames=0):
     frame_index = 0
     try:
         while True:
-            ok, frame = cap.read()
+            ok, frame = reader.read()
             if not ok:
                 break
             frame_index += 1
@@ -231,10 +331,12 @@ def render_video(video_path, hypotheses_path, output_path, max_frames=0):
             draw_contact_events(frame, events, frame_index)
             draw_timeline(frame, hypotheses, frame_index, total_frames)
             writer.write(frame)
+            if frame_index % 600 == 0:
+                print(f"rendered {frame_index}/{total_frames} frames...")
             if max_frames and frame_index >= max_frames:
                 break
     finally:
-        cap.release()
+        reader.release()
         writer.release()
     if mp4_output:
         try:
