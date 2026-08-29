@@ -7,6 +7,7 @@ hypothesis-only audit report.
 """
 
 import argparse
+import html
 import json
 import os
 import sys
@@ -182,6 +183,95 @@ def write_json(path, data):
         handle.write("\n")
 
 
+def rel_link(path, base_dir):
+    try:
+        return os.path.relpath(path, base_dir)
+    except ValueError:
+        return path
+
+
+def write_demo_index(path, title, report_clips, audit_html, audit_json, rendered_videos):
+    base_dir = os.path.dirname(path) or "."
+    rows = []
+    for clip in report_clips:
+        label = clip["label"]
+        data = clip["data"]
+        summary = data.get("summary") or {}
+        evaluation = data.get("contact_evaluation")
+        contact = "no contact ground truth"
+        if evaluation:
+            contact = (
+                f"contact recall {evaluation.get('contact_recall')} "
+                f"precision {evaluation.get('contact_precision')}"
+            )
+        video = rendered_videos.get(label)
+        video_link = (
+            f'<a href="{html.escape(rel_link(video, base_dir))}">review MP4</a>'
+            if video
+            else "not rendered"
+        )
+        rows.append(
+            "<tr>"
+            f"<td>{html.escape(label)}</td>"
+            f"<td>{summary.get('point_hypotheses', '')}</td>"
+            f"<td>{summary.get('high_confidence_hypotheses', '')}</td>"
+            f"<td>{summary.get('serve_motions', '')}</td>"
+            f"<td>{html.escape(contact)}</td>"
+            f"<td><a href=\"{html.escape(rel_link(clip['path'], base_dir))}\">hypotheses JSON</a></td>"
+            f"<td>{video_link}</td>"
+            "</tr>"
+        )
+    document = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{html.escape(title)}</title>
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 32px; color: #15191f; }}
+    .warning {{ border-left: 5px solid #d97706; background: #fff7ed; padding: 14px 16px; margin-bottom: 24px; max-width: 980px; }}
+    table {{ border-collapse: collapse; min-width: 980px; }}
+    th, td {{ border-bottom: 1px solid #d7dde5; padding: 10px 12px; text-align: left; vertical-align: top; }}
+    th {{ background: #f3f6fa; font-weight: 650; }}
+    a {{ color: #0f65b7; }}
+  </style>
+</head>
+<body>
+  <h1>{html.escape(title)}</h1>
+  <div class="warning">
+    <strong>Timeline hypotheses are not scoring truth.</strong>
+    These artifacts show what the automated timeline layer currently believes.
+    Confidence is clip-relative, serve counts are hypotheses, and point ends are inferred.
+  </div>
+  <p>
+    <a href="{html.escape(rel_link(audit_html, base_dir))}">Open detailed audit</a>
+    &nbsp;|&nbsp;
+    <a href="{html.escape(rel_link(audit_json, base_dir))}">Compact audit JSON</a>
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th>Clip</th>
+        <th>Hypotheses</th>
+        <th>High</th>
+        <th>Serve Motions</th>
+        <th>Contact Evaluation</th>
+        <th>Data</th>
+        <th>Video</th>
+      </tr>
+    </thead>
+    <tbody>
+      {''.join(rows)}
+    </tbody>
+  </table>
+</body>
+</html>
+"""
+    ensure_parent(path)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(document)
+
+
 def build_lookup(entries, parser, flag_name):
     result = {}
     for raw in entries:
@@ -263,6 +353,7 @@ def main():
 
     os.makedirs(args.out_dir, exist_ok=True)
     report_clips = []
+    rendered_videos = {}
     for label, jsonl_path in clips:
         result = run_clip(label, jsonl_path, args, manifests, expected_contacts)
         hypothesis_path = os.path.join(args.out_dir, f"{output_stem(label)}_hypotheses.json")
@@ -271,15 +362,20 @@ def main():
         print_summary(result)
         report_clips.append({"label": label, "path": hypothesis_path, "data": result})
         if args.render_videos and label in config_renders:
-            render_clip_video(label, hypothesis_path, config_renders[label], args)
+            rendered_videos[label] = render_clip_video(
+                label, hypothesis_path, config_renders[label], args
+            )
 
     audit_html = os.path.join(args.out_dir, "timeline_audit.html")
     audit_json = os.path.join(args.out_dir, "timeline_audit.json")
     with open(audit_html, "w", encoding="utf-8") as handle:
         handle.write(build_html(args.title, report_clips))
     write_json(audit_json, compact_data(report_clips))
+    demo_index = os.path.join(args.out_dir, "timeline_demo.html")
+    write_demo_index(demo_index, args.title, report_clips, audit_html, audit_json, rendered_videos)
     print(f"wrote {audit_html}")
     print(f"wrote {audit_json}")
+    print(f"wrote {demo_index}")
     print("not_scoring_truth: true")
     print("No scoring analysis was run, and no point_frames output was produced.")
 

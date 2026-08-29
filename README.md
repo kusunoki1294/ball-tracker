@@ -404,6 +404,7 @@ Add `--render-videos` to also create the configured review MP4:
 
 Outputs:
 - `<label>_hypotheses.json` for each clip.
+- `timeline_demo.html` as the entry point for show-and-review.
 - `timeline_audit.html` for human review.
 - `timeline_audit.json` for a compact machine-readable audit.
 - Configured hypothesis overlay MP4s when `--render-videos` is passed.

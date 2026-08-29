@@ -53,6 +53,7 @@ def validate_outputs(output_dir):
         ]
     )
     audit_path = os.path.join(output_dir, "timeline_audit.json")
+    demo_path = os.path.join(output_dir, "timeline_demo.html")
     with open(audit_path, "r", encoding="utf-8") as handle:
         audit = json.load(handle)
 
@@ -62,6 +63,13 @@ def validate_outputs(output_dir):
         errors.append("timeline audit JSON must carry not_scoring_truth=true")
     if "point_frames" in payload:
         errors.append("timeline audit JSON must not contain point_frames")
+    if not os.path.exists(demo_path):
+        errors.append("timeline demo HTML was not generated")
+    else:
+        with open(demo_path, "r", encoding="utf-8") as handle:
+            demo = handle.read()
+        if "point_frames" in demo:
+            errors.append("timeline demo HTML must not contain point_frames")
 
     clips = {clip["label"]: clip for clip in audit.get("clips", [])}
     expected = {
