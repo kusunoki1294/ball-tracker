@@ -309,9 +309,7 @@ def run_clip(label, jsonl_path, args, manifests, expected_contacts):
 def render_clip_video(label, hypothesis_path, render_config, args):
     from render_timeline_hypotheses import render_video
 
-    output = render_config["output"]
-    if not os.path.isabs(output):
-        output = os.path.join(args.out_dir, output)
+    output = render_output_path(render_config, args)
     render_video(
         render_config["video"],
         hypothesis_path,
@@ -319,6 +317,13 @@ def render_clip_video(label, hypothesis_path, render_config, args):
         max_frames=args.render_max_frames,
     )
     print(f"wrote {output}")
+    return output
+
+
+def render_output_path(render_config, args):
+    output = render_config["output"]
+    if not os.path.isabs(output):
+        output = os.path.join(args.out_dir, output)
     return output
 
 
@@ -365,6 +370,10 @@ def main():
             rendered_videos[label] = render_clip_video(
                 label, hypothesis_path, config_renders[label], args
             )
+        elif label in config_renders:
+            existing_render = render_output_path(config_renders[label], args)
+            if os.path.exists(existing_render):
+                rendered_videos[label] = existing_render
 
     audit_html = os.path.join(args.out_dir, "timeline_audit.html")
     audit_json = os.path.join(args.out_dir, "timeline_audit.json")
