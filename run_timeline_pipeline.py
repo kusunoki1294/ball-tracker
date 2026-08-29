@@ -11,6 +11,7 @@ import html
 import json
 import os
 import sys
+import zipfile
 
 from export_timeline_audit import build_html, compact_data
 from timeline_hypotheses import (
@@ -94,6 +95,16 @@ def parse_args():
         default=0,
         help="Optional frame limit for rendered videos, useful for smoke checks.",
     )
+    parser.add_argument(
+        "--bundle-demo",
+        action="store_true",
+        help="Write a flat zip bundle containing the demo page, audit files, JSON, and videos.",
+    )
+    parser.add_argument(
+        "--bundle-output",
+        default="",
+        help="Optional bundle path or filename. Defaults to timeline_demo_bundle.zip in --out-dir.",
+    )
     return parser.parse_args()
 
 
@@ -118,6 +129,7 @@ def configured_args(args, config):
         "span_pad_seconds",
         "scan_window_seconds",
         "scan_step_seconds",
+        "bundle_output",
     ):
         value = config.get(field)
         if value is not None and getattr(args, field) in ("", None):
@@ -292,6 +304,27 @@ def write_demo_index(path, title, report_clips, audit_html, audit_json, rendered
         handle.write(document)
 
 
+def write_demo_bundle(path, demo_index, audit_html, audit_json, report_clips, rendered_videos):
+    ensure_parent(path)
+    files = [demo_index, audit_html, audit_json]
+    files.extend(clip["path"] for clip in report_clips)
+    files.extend(rendered_videos.values())
+    seen = set()
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
+        for file_path in files:
+            if not file_path or file_path in seen or not os.path.exists(file_path):
+                continue
+            seen.add(file_path)
+            archive.write(file_path, arcname=os.path.basename(file_path))
+
+
+def bundle_output_path(args):
+    output = args.bundle_output or "timeline_demo_bundle.zip"
+    if not os.path.isabs(output):
+        output = os.path.join(args.out_dir, output)
+    return output
+
+
 def build_lookup(entries, parser, flag_name):
     result = {}
     for raw in entries:
@@ -405,6 +438,17 @@ def main():
     print(f"wrote {audit_html}")
     print(f"wrote {audit_json}")
     print(f"wrote {demo_index}")
+    if args.bundle_demo:
+        bundle_path = bundle_output_path(args)
+        write_demo_bundle(
+            bundle_path,
+            demo_index,
+            audit_html,
+            audit_json,
+            report_clips,
+            rendered_videos,
+        )
+        print(f"wrote {bundle_path}")
     print("not_scoring_truth: true")
     print("No scoring analysis was run, and no point_frames output was produced.")
 

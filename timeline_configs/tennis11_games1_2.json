@@ -2,6 +2,7 @@
   "title": "Tennis11 Timeline Hypothesis Audit",
   "court_calib_file": "yoloVids/calibration/court_calib_tennis11.json",
   "out_dir": "yoloVids/outputs/tennis11/timeline",
+  "bundle_output": "tennis11_timeline_demo.zip",
   "fps": 30.0,
   "clips": [
     {
