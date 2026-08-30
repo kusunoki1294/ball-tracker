@@ -446,8 +446,9 @@ Render a hypothesis-only overlay video for visual review:
 The renderer also reads only timeline hypothesis JSON. It draws an explicit
 "not scoring truth" panel, active hypothesis details, serve contacts, review
 reasons, and a bottom timeline bar. MP4 output is preferred for size; AVI is a
-fallback. On this OpenCV build, MJPEG AVI inputs read reliably while the game-2
-H.264 MP4 does not; convert MP4 slices to MJPEG AVI before rendering if needed.
+fallback. If OpenCV cannot open a source video, the renderer falls back to
+ffmpeg frame decoding and prints periodic progress so long review renders do not
+look hung.
 
 `eval_bounce_detect.py` also reports an ANCHORING HAZARD: detections closer to a
 serve strike than the minimum flight time. Those are the strike itself, and a
@@ -465,10 +466,13 @@ Ball-track recall is the bottleneck for full automation
   ball on 62.8% of frames, but after held/coasted repeats only 56.8% are distinct
   real observations. Game 2 drops to 50.3%, and its activity spans fragment more.
 - Point timeline automation exists as `timeline_hypotheses.py`, but it is not a
-  scoring source. On game 1 it finds all 7 verified serve contacts with 0.538
-  contact precision; on game 2 it produces hypotheses without ground truth. A
-  hypothesis report is useful for review, but feeding it straight into scoring
-  would silently invent or merge points.
+  scoring source. On game 1 it now emits 6 hypotheses for the 6 verified points
+  while retaining all 13 serve-like motions for audit; the extra motions are
+  suppressed as rally evidence instead of being promoted to point starts. On
+  game 2 it produces hypotheses without ground truth. A single-game clip also
+  enforces one resolved server side, because alternating servers inside one game
+  contradicts tennis. A hypothesis report is useful for review, but feeding it
+  straight into scoring would silently invent or merge points.
 Point-classification fixes (2026-08)
 These do not add bounces; they stop the classifier from inventing verdicts when
 the bounces are missing. With offline bounces and serve motions integrated,

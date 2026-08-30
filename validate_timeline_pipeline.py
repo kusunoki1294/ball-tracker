@@ -74,18 +74,18 @@ def validate_outputs(output_dir):
     clips = {clip["label"]: clip for clip in audit.get("clips", [])}
     expected = {
         "game 1": {
-            "point_hypotheses": 8,
+            "point_hypotheses": 6,
             "high_confidence_hypotheses": 1,
             "serve_motions": 13,
-            "suppressed_rally_motions": 4,
+            "suppressed_rally_motions": 6,
             "contact_recall": 1.0,
             "contact_precision": 0.538,
         },
         "game 2": {
-            "point_hypotheses": 9,
-            "high_confidence_hypotheses": 5,
+            "point_hypotheses": 7,
+            "high_confidence_hypotheses": 2,
             "serve_motions": 17,
-            "suppressed_rally_motions": 8,
+            "suppressed_rally_motions": 10,
             "contact_evaluation": None,
         },
     }
@@ -95,6 +95,7 @@ def validate_outputs(output_dir):
             errors.append(f"missing clip {label!r} in timeline audit JSON")
             continue
         summary = clip.get("summary") or {}
+        hypotheses = clip.get("hypotheses") or []
         for key in (
             "point_hypotheses",
             "high_confidence_hypotheses",
@@ -105,6 +106,20 @@ def validate_outputs(output_dir):
                 errors.append(
                     f"{label}: expected {key}={expected_values[key]}, got {summary.get(key)}"
                 )
+        if summary.get("single_server") is not True:
+            errors.append(f"{label}: expected single_server=true")
+        servers = {
+            (hypothesis.get("attempts") or [{}])[0].get("server")
+            for hypothesis in hypotheses
+            if hypothesis.get("attempts")
+        }
+        if len(servers) > 1:
+            errors.append(f"{label}: single-game hypotheses have mixed servers {sorted(servers)}")
+        if servers and summary.get("resolved_single_server") not in servers:
+            errors.append(
+                f"{label}: resolved_single_server={summary.get('resolved_single_server')} "
+                f"does not match hypothesis servers {sorted(servers)}"
+            )
         evaluation = clip.get("contact_evaluation")
         if "contact_evaluation" in expected_values and expected_values["contact_evaluation"] is None:
             if evaluation is not None:

@@ -27,6 +27,7 @@ MIN_SERVE_FLIGHT_SECONDS = 0.33
 NET_LINE_CONTACT_BAND_FT = 2.0
 SECOND_SERVE_MIN_TRACKED_SECONDS = 2.0
 RALLY_CONTINUATION_SUPPRESS_SECONDS = 15.0
+WEAK_REACH_CONTINUATION_SUPPRESS_SECONDS = 3.0
 
 
 def read_tracking_log(path):
@@ -177,6 +178,11 @@ def parse_args():
         type=float,
         default=5.0,
         help="Step for the sliding serve-motion backstop.",
+    )
+    parser.add_argument(
+        "--single-server",
+        action="store_true",
+        help="Treat the window as one game and suppress motions from the opposite server side.",
     )
     return parser.parse_args()
 
@@ -475,6 +481,7 @@ def build_hypotheses(
     span_pad_seconds,
     scan_window_seconds,
     scan_step_seconds,
+    single_server=False,
 ):
     if not rows:
         return {"hypotheses": [], "activity_spans": [], "summary": {}}
@@ -512,10 +519,26 @@ def build_hypotheses(
         raw_points.append({"attempts": [attempt]})
 
     grouped = []
+    resolved_single_server = None
     max_second_gap = frame_window(MAX_SECOND_SERVE_GAP_SECONDS, fps)
     max_rally_continuation_gap = frame_window(RALLY_CONTINUATION_SUPPRESS_SECONDS, fps)
     for point in raw_points:
         attempt = point["attempts"][0]
+        if single_server and resolved_single_server and attempt["server"] != resolved_single_server:
+            if grouped:
+                attempt.setdefault("review_reasons", []).append(
+                    "suppressed_opposite_server_in_single_game"
+                )
+                previous_attempt = grouped[-1]["attempts"][-1]
+                attempt["previous_motion_evidence"] = second_serve_grouping_evidence(
+                    by_frame,
+                    inv_homography,
+                    previous_attempt,
+                    attempt,
+                    fps,
+                )
+                grouped[-1].setdefault("suppressed_rally_motions", []).append(attempt)
+            continue
         if grouped:
             previous = grouped[-1]
             previous_attempt = previous["attempts"][-1]
@@ -536,6 +559,19 @@ def build_hypotheses(
                 len(previous["attempts"]) == 1
                 and previous_attempt["landing"]["result"] in {"in", "unknown"}
             )
+            weak_reach_inside_previous_point = (
+                previous_can_still_be_rally
+                and attempt.get("source") == "peak_reach"
+                and gap <= frame_window(WEAK_REACH_CONTINUATION_SUPPRESS_SECONDS, fps)
+                and not enough_track
+            )
+            if weak_reach_inside_previous_point:
+                attempt.setdefault("review_reasons", []).append(
+                    "suppressed_weak_reach_motion_inside_previous_point"
+                )
+                attempt["previous_motion_evidence"] = second_serve_evidence
+                previous.setdefault("suppressed_rally_motions", []).append(attempt)
+                continue
             if (
                 previous_can_still_be_rally
                 and gap <= max_rally_continuation_gap
@@ -587,6 +623,8 @@ def build_hypotheses(
                 )
             attempt["previous_motion_evidence"] = second_serve_evidence
         grouped.append(point)
+        if single_server and resolved_single_server is None:
+            resolved_single_server = attempt["server"]
 
     hypotheses = []
     for index, point in enumerate(grouped, start=1):
@@ -661,6 +699,8 @@ def build_hypotheses(
                 "It is not a scoring contract; serve_count and point boundaries "
                 "remain hypotheses until independently verified."
             ),
+            "single_server": bool(single_server),
+            "resolved_single_server": resolved_single_server,
         },
         "activity_spans": spans,
         "serve_motions": motions,
@@ -822,6 +862,7 @@ def main():
         args.span_pad_seconds,
         args.scan_window_seconds,
         args.scan_step_seconds,
+        single_server=args.single_server,
     )
     result["source_jsonl"] = args.jsonl
     if args.manifest:

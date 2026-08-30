@@ -85,6 +85,11 @@ def parse_args():
     parser.add_argument("--scan-window-seconds", type=float, default=15.0)
     parser.add_argument("--scan-step-seconds", type=float, default=5.0)
     parser.add_argument(
+        "--single-server",
+        action="store_true",
+        help="Treat each clip as one game and suppress opposite-server hypotheses.",
+    )
+    parser.add_argument(
         "--render-videos",
         action="store_true",
         help="Render configured hypothesis overlay videos after writing JSON/HTML outputs.",
@@ -142,6 +147,8 @@ def configured_args(args, config):
             setattr(args, field, value)
         elif value is not None and field.endswith("_seconds"):
             setattr(args, field, value)
+    if config.get("single_server") is not None:
+        args.single_server = bool(config["single_server"])
     if not args.court_calib_file:
         raise ValueError("court calibration is required via --court-calib-file or config")
     if not args.out_dir:
@@ -154,6 +161,7 @@ def config_entries(config):
     manifests = {}
     contacts = {}
     renders = {}
+    clip_options = {}
     for item in config.get("clips") or []:
         label = item.get("label")
         jsonl = item.get("jsonl")
@@ -173,7 +181,10 @@ def config_entries(config):
                 "video": item["video"],
                 "output": item.get("render_output") or f"{output_stem(label)}_timeline_hypotheses.mp4",
             }
-    return clips, manifests, contacts, renders
+        clip_options[label] = {
+            "single_server": item.get("single_server") if "single_server" in item else None,
+        }
+    return clips, manifests, contacts, renders, clip_options
 
 
 def output_stem(label):
@@ -342,8 +353,12 @@ def build_lookup(entries, parser, flag_name):
     return result
 
 
-def run_clip(label, jsonl_path, args, manifests, expected_contacts):
+def run_clip(label, jsonl_path, args, manifests, expected_contacts, clip_options):
     rows, by_frame = read_tracking_log(jsonl_path)
+    options = clip_options.get(label, {})
+    single_server = options.get("single_server")
+    if single_server is None:
+        single_server = args.single_server
     result = build_hypotheses(
         rows,
         by_frame,
@@ -353,6 +368,7 @@ def run_clip(label, jsonl_path, args, manifests, expected_contacts):
         args.span_pad_seconds,
         args.scan_window_seconds,
         args.scan_step_seconds,
+        single_server=bool(single_server),
     )
     result["source_jsonl"] = jsonl_path
     if label in manifests:
@@ -391,7 +407,7 @@ def main():
     args = parse_args()
     config = load_config(args.config)
     args = configured_args(args, config)
-    config_clips, config_manifests, config_contacts, config_renders = config_entries(config)
+    config_clips, config_manifests, config_contacts, config_renders, config_clip_options = config_entries(config)
 
     clips = config_clips + [parse_label_path(raw, "--clip") for raw in args.clip]
     if not clips:
@@ -420,7 +436,7 @@ def main():
     report_clips = []
     rendered_videos = {}
     for label, jsonl_path in clips:
-        result = run_clip(label, jsonl_path, args, manifests, expected_contacts)
+        result = run_clip(label, jsonl_path, args, manifests, expected_contacts, config_clip_options)
         hypothesis_path = os.path.join(args.out_dir, f"{output_stem(label)}_hypotheses.json")
         write_json(hypothesis_path, result)
         print(f"wrote {hypothesis_path}")

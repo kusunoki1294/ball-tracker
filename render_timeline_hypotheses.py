@@ -196,7 +196,7 @@ def open_frame_reader(video_path):
     if cap.isOpened():
         return Cv2FrameReader(cap)
     cap.release()
-    print(f"OpenCV could not open {video_path}; falling back to ffmpeg decoding")
+    print(f"OpenCV could not open {video_path}; falling back to ffmpeg decoding", flush=True)
     return FfmpegFrameReader(video_path)
 
 
@@ -332,7 +332,7 @@ def render_video(video_path, hypotheses_path, output_path, max_frames=0):
             draw_timeline(frame, hypotheses, frame_index, total_frames)
             writer.write(frame)
             if frame_index % 600 == 0:
-                print(f"rendered {frame_index}/{total_frames} frames...")
+                print(f"rendered {frame_index}/{total_frames} frames...", flush=True)
             if max_frames and frame_index >= max_frames:
                 break
     finally:
