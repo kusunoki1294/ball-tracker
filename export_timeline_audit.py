@@ -183,7 +183,7 @@ def comparison_section(clips):
     header = "".join(f"<th>{esc(clip['label'])}</th>" for clip in clips)
     metrics = [
         ("serve-motion hypotheses", "point_hypotheses"),
-        ("isolated point-start candidates", "isolated_point_start_candidates"),
+        ("dead-time isolated serve-motion hypotheses", "isolated_point_start_candidates"),
         ("high confidence", "high_confidence_hypotheses"),
         ("uncertain", "uncertain_hypotheses"),
         ("serve motions", "serve_motions"),

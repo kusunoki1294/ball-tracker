@@ -304,7 +304,7 @@ def write_demo_index(
         highlights.append(
             "<article>"
             f"<span>{html.escape(label)}</span>"
-            f"<strong>{summary.get('point_hypotheses', '')} hypotheses</strong>"
+            f"<strong>{summary.get('point_hypotheses', '')} serve-motion hypotheses</strong>"
             f"<em>{html.escape(status)} · {html.escape(server_mode)}</em>"
             "</article>"
         )
@@ -387,9 +387,9 @@ def write_demo_index(
     <thead>
       <tr>
         <th>Clip</th>
-        <th>Hypotheses</th>
+        <th>Serve-Motion Hypotheses</th>
         <th>Observed</th>
-        <th>Isolated Starts</th>
+        <th>Dead-Time Isolated</th>
         <th>High, Clip-Relative</th>
         <th>Suppressed Rally Motions</th>
         <th>Activity Spans</th>

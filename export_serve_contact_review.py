@@ -12,6 +12,8 @@ import os
 
 import cv2
 
+from render_timeline_hypotheses import open_frame_reader
+
 FRAME_OFFSETS = (-4, -2, 0, 2)
 CROP_SCALE = 3.0
 MIN_CROP_PX = 320
@@ -116,18 +118,40 @@ def crop_rect(frame_shape, bbox):
     return left, top, crop_size, crop_size
 
 
-def extract_frame(capture, frame, output_path, bbox=None):
-    # Timeline frame numbers are 1-based; OpenCV frame positions are 0-based.
-    capture.set(cv2.CAP_PROP_POS_FRAMES, int(frame) - 1)
-    ok, image = capture.read()
-    if not ok or image is None:
-        raise RuntimeError(f"failed extracting frame {frame}")
+def write_cropped_frame(image, output_path, bbox=None):
+    if image is None:
+        raise RuntimeError(f"failed writing {output_path}: no image")
     left, top, width, height = crop_rect(image.shape, bbox)
     cropped = image[top : top + height, left : left + width]
     if bbox:
         cropped = cv2.resize(cropped, (OUTPUT_CROP_PX, OUTPUT_CROP_PX), interpolation=cv2.INTER_CUBIC)
     if not cv2.imwrite(output_path, cropped, [int(cv2.IMWRITE_JPEG_QUALITY), 92]):
         raise RuntimeError(f"failed writing {output_path}")
+
+
+def extract_frames(video, jobs):
+    reader = open_frame_reader(video)
+    current_frame = 0
+    jobs = sorted(jobs, key=lambda item: item[0])
+    try:
+        index = 0
+        while index < len(jobs):
+            target_frame = jobs[index][0]
+            while current_frame < target_frame:
+                ok, image = reader.read()
+                current_frame += 1
+                if not ok or image is None:
+                    raise RuntimeError(f"failed extracting frame {target_frame}")
+            while index < len(jobs) and jobs[index][0] == target_frame:
+                _, output_path, bbox = jobs[index]
+                write_cropped_frame(image, output_path, bbox)
+                index += 1
+        while True:
+            ok, _ = reader.read()
+            if not ok:
+                break
+    finally:
+        reader.release()
 
 
 def landing_text(attempt):
@@ -223,20 +247,15 @@ def export_review(video, hypotheses, output, jsonl="", include_suppressed=False)
     assets_dir = asset_dir_for(output)
     ensure_dir(assets_dir)
     clear_generated_assets(assets_dir)
-    capture = cv2.VideoCapture(video)
-    if not capture.isOpened():
-        raise RuntimeError(f"failed opening video {video}")
+    frame_jobs = []
     for index, (_, attempt, _) in enumerate(contacts, start=1):
         frame = int(attempt["contact_frame"])
         bbox = player_box_for(by_frame, frame, attempt.get("server"))
         for offset, image in contact_assets(index, frame):
-            extract_frame(
-                capture,
-                max(1, frame + offset),
-                os.path.join(assets_dir, image),
-                bbox,
-            )
-    capture.release()
+            frame_to_extract = max(1, frame + offset)
+            output_path = os.path.join(assets_dir, image)
+            frame_jobs.append((frame_to_extract, output_path, bbox))
+    extract_frames(video, frame_jobs)
     write_html(
         output,
         "Serve Contact Review",
