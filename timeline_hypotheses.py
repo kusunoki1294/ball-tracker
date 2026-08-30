@@ -28,6 +28,7 @@ NET_LINE_CONTACT_BAND_FT = 2.0
 SECOND_SERVE_MIN_TRACKED_SECONDS = 2.0
 RALLY_CONTINUATION_SUPPRESS_SECONDS = 15.0
 WEAK_REACH_CONTINUATION_SUPPRESS_SECONDS = 3.0
+LONG_SUPPRESSION_REVIEW_SECONDS = 10.0
 
 
 def read_tracking_log(path):
@@ -472,6 +473,14 @@ def second_serve_grouping_evidence(
     }
 
 
+def mark_suppressed_motion(attempt, previous, evidence, reason, fps):
+    attempt.setdefault("review_reasons", []).append(reason)
+    if evidence["gap_frames"] >= frame_window(LONG_SUPPRESSION_REVIEW_SECONDS, fps):
+        attempt["review_reasons"].append("suppression_may_hide_point_boundary")
+    attempt["previous_motion_evidence"] = evidence
+    previous.setdefault("suppressed_rally_motions", []).append(attempt)
+
+
 def build_hypotheses(
     rows,
     by_frame,
@@ -526,18 +535,21 @@ def build_hypotheses(
         attempt = point["attempts"][0]
         if single_server and resolved_single_server and attempt["server"] != resolved_single_server:
             if grouped:
-                attempt.setdefault("review_reasons", []).append(
-                    "suppressed_opposite_server_in_single_game"
-                )
                 previous_attempt = grouped[-1]["attempts"][-1]
-                attempt["previous_motion_evidence"] = second_serve_grouping_evidence(
+                evidence = second_serve_grouping_evidence(
                     by_frame,
                     inv_homography,
                     previous_attempt,
                     attempt,
                     fps,
                 )
-                grouped[-1].setdefault("suppressed_rally_motions", []).append(attempt)
+                mark_suppressed_motion(
+                    attempt,
+                    grouped[-1],
+                    evidence,
+                    "suppressed_opposite_server_in_single_game",
+                    fps,
+                )
             continue
         if grouped:
             previous = grouped[-1]
@@ -566,11 +578,13 @@ def build_hypotheses(
                 and not enough_track
             )
             if weak_reach_inside_previous_point:
-                attempt.setdefault("review_reasons", []).append(
-                    "suppressed_weak_reach_motion_inside_previous_point"
+                mark_suppressed_motion(
+                    attempt,
+                    previous,
+                    second_serve_evidence,
+                    "suppressed_weak_reach_motion_inside_previous_point",
+                    fps,
                 )
-                attempt["previous_motion_evidence"] = second_serve_evidence
-                previous.setdefault("suppressed_rally_motions", []).append(attempt)
                 continue
             if (
                 previous_can_still_be_rally
@@ -578,11 +592,13 @@ def build_hypotheses(
                 and enough_track
                 and rally_between is True
             ):
-                attempt.setdefault("review_reasons", []).append(
-                    "suppressed_rally_motion_not_point_start"
+                mark_suppressed_motion(
+                    attempt,
+                    previous,
+                    second_serve_evidence,
+                    "suppressed_rally_motion_not_point_start",
+                    fps,
                 )
-                attempt["previous_motion_evidence"] = second_serve_evidence
-                previous.setdefault("suppressed_rally_motions", []).append(attempt)
                 continue
             if (
                 same_server
