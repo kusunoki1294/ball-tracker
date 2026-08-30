@@ -12,6 +12,8 @@ import subprocess
 import sys
 import tempfile
 
+from timeline_hypotheses import resolve_single_server_vote
+
 
 TIMELINE_CONFIG = "timeline_configs/tennis11_games1_2.json"
 
@@ -123,6 +125,16 @@ def validate_outputs(output_dir):
                 f"{label}: resolved_single_server={summary.get('resolved_single_server')} "
                 f"does not match hypothesis servers {sorted(servers)}"
             )
+        vote = summary.get("single_server_vote")
+        if expected_single_server:
+            if not vote:
+                errors.append(f"{label}: expected single_server_vote")
+            elif vote.get("contested"):
+                errors.append(f"{label}: expected uncontested single_server_vote")
+            elif vote.get("margin", 0) < vote.get("min_margin", 0):
+                errors.append(f"{label}: single_server_vote margin is below threshold")
+        elif vote is not None:
+            errors.append(f"{label}: expected no single_server_vote")
         evaluation = clip.get("contact_evaluation")
         if "contact_evaluation" in expected_values and expected_values["contact_evaluation"] is None:
             if evaluation is not None:
@@ -139,9 +151,41 @@ def validate_outputs(output_dir):
     return errors
 
 
+def fake_point(server, confidence="high", source="ball_toss", landing_result="in"):
+    return {
+        "attempts": [
+            {
+                "server": server,
+                "confidence": confidence,
+                "source": source,
+                "landing": {
+                    "bounce_id": "bounce_fake" if landing_result else None,
+                    "result": landing_result,
+                },
+            }
+        ]
+    }
+
+
+def validate_contested_single_server_vote():
+    errors = []
+    points = [
+        fake_point("near", "high", "ball_toss", "in"),
+        fake_point("near", "medium", "peak_reach", None),
+        fake_point("far", "high", "ball_toss", "in"),
+    ]
+    resolved, vote = resolve_single_server_vote(points)
+    if resolved is not None:
+        errors.append(f"contested single-server vote should abstain, got {resolved}")
+    if vote.get("contested") is not True:
+        errors.append("contested single-server vote did not set contested=true")
+    return errors
+
+
 def main():
     errors = []
     errors.extend(validate_import_boundary())
+    errors.extend(validate_contested_single_server_vote())
     with tempfile.TemporaryDirectory() as tmpdir:
         errors.extend(validate_outputs(tmpdir))
     if errors:

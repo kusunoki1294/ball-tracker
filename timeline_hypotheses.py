@@ -29,6 +29,8 @@ SECOND_SERVE_MIN_TRACKED_SECONDS = 2.0
 RALLY_CONTINUATION_SUPPRESS_SECONDS = 15.0
 WEAK_REACH_CONTINUATION_SUPPRESS_SECONDS = 3.0
 LONG_SUPPRESSION_REVIEW_SECONDS = 10.0
+SINGLE_SERVER_MIN_VOTE_MARGIN = 5.0
+SINGLE_SERVER_MIN_COUNT_MARGIN = 2
 
 
 def read_tracking_log(path):
@@ -335,10 +337,23 @@ def resolve_single_server_vote(points):
     winner = max(votes, key=lambda side: votes[side])
     loser = "near" if winner == "far" else "far"
     margin = round(votes[winner] - votes[loser], 3)
-    return winner, {
+    count_margin = counts[winner] - counts[loser]
+    contested = (
+        counts[loser] > 0
+        and (
+            margin < SINGLE_SERVER_MIN_VOTE_MARGIN
+            or count_margin < SINGLE_SERVER_MIN_COUNT_MARGIN
+        )
+    )
+    resolved = None if contested else winner
+    return resolved, {
         "votes": {side: round(value, 3) for side, value in votes.items()},
         "counts": counts,
         "margin": margin,
+        "count_margin": count_margin,
+        "min_margin": SINGLE_SERVER_MIN_VOTE_MARGIN,
+        "min_count_margin": SINGLE_SERVER_MIN_COUNT_MARGIN,
+        "contested": contested,
     }
 
 
@@ -660,6 +675,11 @@ def build_hypotheses(
     single_server_vote = None
     if single_server:
         resolved_single_server, single_server_vote = resolve_single_server_vote(grouped)
+        if resolved_single_server is None and single_server_vote and single_server_vote["contested"]:
+            for point in grouped:
+                point["attempts"][0].setdefault("review_reasons", []).append(
+                    "single_server_vote_contested"
+                )
         filtered = []
         previous_kept = None
         for point in grouped:
