@@ -169,16 +169,51 @@ def fake_point(server, confidence="high", source="ball_toss", landing_result="in
 
 def validate_contested_single_server_vote():
     errors = []
-    points = [
+    both_gates = [
         fake_point("near", "high", "ball_toss", "in"),
         fake_point("near", "medium", "peak_reach", None),
         fake_point("far", "high", "ball_toss", "in"),
     ]
-    resolved, vote = resolve_single_server_vote(points)
+    resolved, vote = resolve_single_server_vote(both_gates)
     if resolved is not None:
         errors.append(f"contested single-server vote should abstain, got {resolved}")
     if vote.get("contested") is not True:
         errors.append("contested single-server vote did not set contested=true")
+
+    margin_only = [
+        fake_point("near", "medium", "peak_reach", None),
+        fake_point("near", "medium", "peak_reach", None),
+        fake_point("near", "medium", "peak_reach", None),
+        fake_point("far", "high", "ball_toss", "in"),
+    ]
+    resolved, vote = resolve_single_server_vote(margin_only)
+    if resolved is not None or vote.get("contested") is not True:
+        errors.append("single-server vote should abstain when only the vote margin is thin")
+
+    count_only = [
+        fake_point("near", "high", "peak_reach", None),
+        fake_point("near", "high", "peak_reach", None),
+        fake_point("near", "high", "peak_reach", None),
+        fake_point("near", "high", "peak_reach", None),
+        fake_point("far", "medium", "ball_toss", "fault"),
+        fake_point("far", "medium", "ball_toss", "fault"),
+        fake_point("far", "medium", "ball_toss", "fault"),
+        fake_point("far", "medium", "ball_toss", "fault"),
+        fake_point("far", "medium", "ball_toss", "fault"),
+    ]
+    resolved, vote = resolve_single_server_vote(count_only)
+    if resolved is not None or vote.get("contested") is not True:
+        errors.append("single-server vote should abstain when only the count margin is thin")
+
+    at_threshold = [
+        fake_point("near", "high", "ball_toss", "fault"),
+        fake_point("near", "medium", "ball_toss", "fault"),
+        fake_point("near", "unknown", "unknown", "in"),
+        fake_point("far", "high", "ball_toss", "in"),
+    ]
+    resolved, vote = resolve_single_server_vote(at_threshold)
+    if resolved != "near" or vote.get("contested"):
+        errors.append("single-server vote should resolve at the exact margin/count thresholds")
     return errors
 
 
