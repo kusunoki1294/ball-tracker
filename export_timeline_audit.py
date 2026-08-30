@@ -69,6 +69,15 @@ def landing_summary(hypothesis):
     return landing.get("reason") or "no landing detected"
 
 
+def boundary_summary(hypothesis):
+    status = hypothesis.get("boundary_status")
+    if status == "point_start_hypothesis_deadtime_isolated":
+        return "point-start hypothesis; dead-time isolated"
+    if status == "point_start_hypothesis_no_deadtime_evidence":
+        return "point-start hypothesis; no dead-time evidence"
+    return status or "unknown"
+
+
 def hypothesis_rows(data):
     rows = []
     for hypothesis in data.get("hypotheses", []):
@@ -99,7 +108,7 @@ def hypothesis_rows(data):
                 end_note=end_note,
                 conf=esc(hypothesis.get("confidence")),
                 score=esc(hypothesis.get("confidence_score")),
-                boundary=esc(hypothesis.get("boundary_status") or "unknown"),
+                boundary=esc(boundary_summary(hypothesis)),
                 server=esc(first.get("server")),
                 serves=esc(hypothesis.get("serve_count")),
                 contact=esc(first.get("contact_frame")),
@@ -144,7 +153,7 @@ def clip_section(clip):
   <h2>{esc(clip['label'])}</h2>
   <p class='src'>{esc(data.get('source_jsonl') or clip['path'])}</p>
   <div class='stats'>
-    <div><span class='k'>point hypotheses</span><span class='v'>{esc(summary.get('point_hypotheses'))}</span></div>
+    <div><span class='k'>serve-motion hypotheses</span><span class='v'>{esc(summary.get('point_hypotheses'))}</span></div>
     <div><span class='k'>high confidence</span><span class='v'>{esc(summary.get('high_confidence_hypotheses'))}</span></div>
     <div><span class='k'>uncertain</span><span class='v'>{esc(summary.get('uncertain_hypotheses'))}</span></div>
     <div><span class='k'>serve motions</span><span class='v'>{esc(summary.get('serve_motions'))}</span></div>
@@ -173,7 +182,7 @@ def comparison_section(clips):
         return ""
     header = "".join(f"<th>{esc(clip['label'])}</th>" for clip in clips)
     metrics = [
-        ("point hypotheses", "point_hypotheses"),
+        ("serve-motion hypotheses", "point_hypotheses"),
         ("isolated point-start candidates", "isolated_point_start_candidates"),
         ("high confidence", "high_confidence_hypotheses"),
         ("uncertain", "uncertain_hypotheses"),
@@ -260,8 +269,8 @@ def build_html(title, clips):
   <p>Nothing here has been scored. This report reads only timeline hypothesis output and
   deliberately does not read analysis JSON, so it cannot show hypotheses as if they were
   adjudicated points. Point <em>ends</em> in particular are inferred from ball activity and have
-  no ground truth at all. A hypothesis marked unisolated is a serve-like motion candidate,
-  not a confirmed point boundary.</p>
+  no ground truth at all. "No dead-time evidence" means the boundary lacks that
+  specific corroboration; it does not mean the serve-contact detection is wrong.</p>
 </div>
 {sections}
 {comparison_section(clips)}
