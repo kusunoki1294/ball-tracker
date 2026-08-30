@@ -156,7 +156,7 @@ def configured_args(args, config):
     return args
 
 
-def config_entries(config):
+def config_entries(config, out_dir):
     clips = []
     manifests = {}
     contacts = {}
@@ -186,7 +186,7 @@ def config_entries(config):
         if item.get("contact_review_output"):
             output = item["contact_review_output"]
             if not os.path.isabs(output):
-                output = os.path.join(config.get("out_dir") or "", output)
+                output = os.path.join(out_dir, output)
             contact_reviews[label] = output
             contact_review_options[label] = {
                 "include_suppressed": bool(item.get("contact_review_include_suppressed")),
@@ -530,7 +530,7 @@ def main():
         config_contact_reviews,
         config_contact_review_options,
         config_clip_options,
-    ) = config_entries(config)
+    ) = config_entries(config, args.out_dir)
 
     clips = config_clips + [parse_label_path(raw, "--clip") for raw in args.clip]
     if not clips:

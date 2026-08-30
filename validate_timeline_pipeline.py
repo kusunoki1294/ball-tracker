@@ -72,6 +72,35 @@ def validate_outputs(output_dir):
             demo = handle.read()
         if "point_frames" in demo:
             errors.append("timeline demo HTML must not contain point_frames")
+        if "contact sheet (7 accepted)" not in demo:
+            errors.append("timeline demo must label game 1 contact review contents")
+        if "contact sheet (9 accepted + 8 suppressed)" not in demo:
+            errors.append("timeline demo must label game 2 contact review contents")
+
+    expected_contact_assets = {
+        "game1_serve_contact_review": 28,
+        "game2_serve_contact_review": 68,
+    }
+    for stem, expected_count in expected_contact_assets.items():
+        review_path = os.path.join(output_dir, f"{stem}.html")
+        assets_dir = os.path.join(output_dir, f"{stem}_assets")
+        if not os.path.exists(review_path):
+            errors.append(f"missing generated contact review {review_path}")
+            continue
+        if not os.path.isdir(assets_dir):
+            errors.append(f"missing generated contact review assets {assets_dir}")
+            continue
+        count = len(
+            [
+                name
+                for name in os.listdir(assets_dir)
+                if name.startswith("contact_") and name.lower().endswith(".jpg")
+            ]
+        )
+        if count != expected_count:
+            errors.append(
+                f"{stem}: expected {expected_count} strip assets, got {count}"
+            )
 
     clips = {clip["label"]: clip for clip in audit.get("clips", [])}
     expected = {
