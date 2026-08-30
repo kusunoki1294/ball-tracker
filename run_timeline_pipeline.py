@@ -223,7 +223,16 @@ def rel_link(path, base_dir):
         return path
 
 
-def write_demo_index(path, title, report_clips, audit_html, audit_json, rendered_videos, contact_reviews):
+def write_demo_index(
+    path,
+    title,
+    report_clips,
+    audit_html,
+    audit_json,
+    rendered_videos,
+    contact_reviews,
+    contact_review_options,
+):
     base_dir = os.path.dirname(path) or "."
     rows = []
     highlights = []
@@ -257,13 +266,31 @@ def write_demo_index(path, title, report_clips, audit_html, audit_json, rendered
             server_mode = f"server: {summary.get('resolved_single_server')}"
         video = rendered_videos.get(label)
         contact_review = contact_reviews.get(label)
+        accepted_contact_count = sum(
+            len(hypothesis.get("attempts") or [])
+            for hypothesis in data.get("hypotheses") or []
+        )
+        suppressed_contact_count = sum(
+            len(hypothesis.get("suppressed_rally_motions") or [])
+            for hypothesis in data.get("hypotheses") or []
+        )
+        contact_review_label = f"contact sheet ({accepted_contact_count} accepted)"
+        if (
+            suppressed_contact_count
+            and contact_review_options.get(label, {}).get("include_suppressed")
+        ):
+            contact_review_label = (
+                f"contact sheet ({accepted_contact_count} accepted + "
+                f"{suppressed_contact_count} suppressed)"
+            )
         video_link = (
             f'<a href="{html.escape(rel_link(video, base_dir))}">review MP4</a>'
             if video
             else "not rendered"
         )
         contact_review_link = (
-            f'<a href="{html.escape(rel_link(contact_review, base_dir))}">contact sheet</a>'
+            f'<a href="{html.escape(rel_link(contact_review, base_dir))}">'
+            f"{html.escape(contact_review_label)}</a>"
             if contact_review and os.path.exists(contact_review)
             else "not generated"
         )
@@ -570,6 +597,7 @@ def main():
         audit_json,
         rendered_videos,
         config_contact_reviews,
+        config_contact_review_options,
     )
     print(f"wrote {audit_html}")
     print(f"wrote {audit_json}")
