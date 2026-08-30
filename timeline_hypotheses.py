@@ -488,6 +488,12 @@ def confidence_for_point(attempts, isolation, fragmentation):
     return round(score, 3), label, reasons
 
 
+def boundary_status(isolation):
+    if isolation and isolation.get("isolated_by_deadtime"):
+        return "isolated_point_start_candidate"
+    return "unisolated_serve_motion_candidate"
+
+
 def second_serve_grouping_evidence(
     by_frame,
     inv_homography,
@@ -720,6 +726,7 @@ def build_hypotheses(
         isolation = isolation_before(ball_frames, contact_frame, fps)
         fragmentation = local_fragmentation(spans, contact_frame, fps)
         score, confidence, reasons = confidence_for_point(point["attempts"], isolation, fragmentation)
+        status = boundary_status(isolation)
         review_reasons = sorted(
             {
                 reason
@@ -738,6 +745,7 @@ def build_hypotheses(
                 "end_source": "last_ball_activity_before_next_hypothesis" if next_contact else "end_of_log",
                 "confidence_score": score,
                 "confidence": confidence,
+                "boundary_status": status,
                 "reasons": reasons,
                 "review_reasons": review_reasons,
                 "ends_have_no_truth": True,
@@ -772,6 +780,11 @@ def build_hypotheses(
                 len(item.get("suppressed_rally_motions", [])) for item in hypotheses
             ),
             "point_hypotheses": len(hypotheses),
+            "isolated_point_start_candidates": sum(
+                1
+                for item in hypotheses
+                if item.get("boundary_status") == "isolated_point_start_candidate"
+            ),
             "high_confidence_hypotheses": sum(1 for item in hypotheses if item["confidence"] == "high"),
             "uncertain_hypotheses": sum(1 for item in hypotheses if item["confidence"] == "uncertain"),
             "confidence_caveat": (

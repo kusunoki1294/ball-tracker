@@ -81,6 +81,7 @@ def hypothesis_rows(data):
             "<td>{id}</td>"
             "<td class='num'>f{start}–f{end}{end_note}</td>"
             "<td>{conf} <span class='score'>{score}</span></td>"
+            "<td>{boundary}</td>"
             "<td>{server}</td>"
             "<td class='num'>{serves}</td>"
             "<td class='num'>f{contact}</td>"
@@ -98,6 +99,7 @@ def hypothesis_rows(data):
                 end_note=end_note,
                 conf=esc(hypothesis.get("confidence")),
                 score=esc(hypothesis.get("confidence_score")),
+                boundary=esc(hypothesis.get("boundary_status") or "unknown"),
                 server=esc(first.get("server")),
                 serves=esc(hypothesis.get("serve_count")),
                 contact=esc(first.get("contact_frame")),
@@ -153,8 +155,8 @@ def clip_section(clip):
   {contact_block(data)}
   <table>
     <thead><tr>
-      <th>hypothesis</th><th>frames</th><th>confidence</th><th>server</th>
-      <th>serves<sup>†</sup></th><th>first contact</th><th>serve landing</th>
+      <th>hypothesis</th><th>frames</th><th>confidence</th><th>boundary status</th>
+      <th>server</th><th>serves<sup>†</sup></th><th>first contact</th><th>serve landing</th>
       <th>suppressed rally motions</th><th>dead frames before</th><th>nearby spans</th><th>reasons</th><th>review reasons</th>
     </tr></thead>
     <tbody>
@@ -172,6 +174,7 @@ def comparison_section(clips):
     header = "".join(f"<th>{esc(clip['label'])}</th>" for clip in clips)
     metrics = [
         ("point hypotheses", "point_hypotheses"),
+        ("isolated point-start candidates", "isolated_point_start_candidates"),
         ("high confidence", "high_confidence_hypotheses"),
         ("uncertain", "uncertain_hypotheses"),
         ("serve motions", "serve_motions"),
@@ -257,7 +260,8 @@ def build_html(title, clips):
   <p>Nothing here has been scored. This report reads only timeline hypothesis output and
   deliberately does not read analysis JSON, so it cannot show hypotheses as if they were
   adjudicated points. Point <em>ends</em> in particular are inferred from ball activity and have
-  no ground truth at all.</p>
+  no ground truth at all. A hypothesis marked unisolated is a serve-like motion candidate,
+  not a confirmed point boundary.</p>
 </div>
 {sections}
 {comparison_section(clips)}
@@ -282,6 +286,7 @@ def compact_data(clips):
                         "ends_have_no_truth": item.get("ends_have_no_truth"),
                         "confidence": item.get("confidence"),
                         "confidence_score": item.get("confidence_score"),
+                        "boundary_status": item.get("boundary_status"),
                         "serve_count_hypothesis": item.get("serve_count"),
                         "review_reasons": item.get("review_reasons"),
                     }

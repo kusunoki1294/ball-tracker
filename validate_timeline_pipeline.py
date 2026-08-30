@@ -106,6 +106,7 @@ def validate_outputs(output_dir):
     expected = {
         "game 1": {
             "point_hypotheses": 6,
+            "isolated_point_start_candidates": 0,
             "high_confidence_hypotheses": 1,
             "serve_motions": 13,
             "suppressed_rally_motions": 6,
@@ -115,6 +116,7 @@ def validate_outputs(output_dir):
         },
         "game 2": {
             "point_hypotheses": 9,
+            "isolated_point_start_candidates": 0,
             "high_confidence_hypotheses": 5,
             "serve_motions": 17,
             "suppressed_rally_motions": 8,
@@ -131,6 +133,7 @@ def validate_outputs(output_dir):
         hypotheses = clip.get("hypotheses") or []
         for key in (
             "point_hypotheses",
+            "isolated_point_start_candidates",
             "high_confidence_hypotheses",
             "serve_motions",
             "suppressed_rally_motions",

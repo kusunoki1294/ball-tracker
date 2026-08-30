@@ -315,6 +315,7 @@ def write_demo_index(
             f"<td>{html.escape(label)}</td>"
             f"<td>{summary.get('point_hypotheses', '')}</td>"
             f"<td>{summary.get('distinct_real_observations_pct', '')}%</td>"
+            f"<td>{summary.get('isolated_point_start_candidates', '')}</td>"
             f"<td>{summary.get('high_confidence_hypotheses', '')}</td>"
             f"<td>{summary.get('suppressed_rally_motions', 0)}</td>"
             f"<td>{summary.get('activity_spans', '')}</td>"
@@ -380,6 +381,7 @@ def write_demo_index(
         <th>Clip</th>
         <th>Hypotheses</th>
         <th>Observed</th>
+        <th>Isolated Starts</th>
         <th>High, Clip-Relative</th>
         <th>Suppressed Rally Motions</th>
         <th>Activity Spans</th>

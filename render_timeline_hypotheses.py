@@ -265,8 +265,9 @@ def draw_panel(frame, hypothesis, frame_index, total_frames):
         f"suppressed_rally={hypothesis.get('suppressed_rally_motion_count', 0)}  "
         f"landing={landing}"
     )
+    boundary = hypothesis.get("boundary_status") or "unknown_boundary"
     review = ", ".join(hypothesis.get("review_reasons") or [])
-    line3 = "review: " + (review if review else "none")
+    line3 = "boundary: " + boundary + "  review: " + (review if review else "none")
     draw_text(frame, fit_text(line1, 95), (28, 98), 0.58, confidence_color(hypothesis.get("confidence")), 2)
     draw_text(frame, fit_text(line2, 105), (28, 124), 0.52, TEXT, 1)
     draw_text(frame, fit_text(line3, 105), (28, 148), 0.46, MUTED if not review else REVIEW, 1)
