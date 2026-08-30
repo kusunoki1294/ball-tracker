@@ -319,7 +319,7 @@ def main():
     for clip in clips:
         summary = clip["data"].get("summary") or {}
         ground_truth = "verified contacts" if clip["data"].get("contact_evaluation") else "NO ground truth"
-        print(f"  {clip['label']}: {summary.get('point_hypotheses')} hypotheses "
+        print(f"  {clip['label']}: {summary.get('point_hypotheses')} serve-motion hypotheses "
               f"({summary.get('high_confidence_hypotheses')} high), {ground_truth}")
     if args.data_json:
         ensure_parent(args.data_json)

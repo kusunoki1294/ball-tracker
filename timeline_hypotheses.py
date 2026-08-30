@@ -884,7 +884,7 @@ def evaluate_contacts(motions, expected_frames, tolerance):
 def print_summary(result):
     summary = result["summary"]
     print(
-        "timeline hypotheses: {points} candidates, {motions} serve motions, "
+        "serve-motion hypotheses: {points}, {motions} serve motions, "
         "{spans} activity spans".format(
             points=summary["point_hypotheses"],
             motions=summary["serve_motions"],
@@ -908,7 +908,7 @@ def print_summary(result):
             "{id} f{start}-{end} {conf} score={score:.3f} "
             "server={server} contact=f{contact} serves={serve_count} "
             "landing={landing}".format(
-                id=hypothesis["id"],
+                id=hypothesis.get("display_id") or hypothesis["id"],
                 start=hypothesis["start_frame"],
                 end=hypothesis["end_frame"],
                 conf=hypothesis["confidence"],
