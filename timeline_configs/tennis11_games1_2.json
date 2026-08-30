@@ -10,6 +10,7 @@
       "jsonl": "yoloVids/outputs/tennis11/ai11.1.jsonl",
       "video": "yoloVids/inputs/tennis11_game1_clean.avi",
       "render_output": "game1_timeline_hypotheses.mp4",
+      "contact_review_output": "game1_serve_contact_review.html",
       "single_server": true,
       "evaluation_manifest": "manifests/tennis11_game1_manifest.json",
       "expected_contact_frames": [159, 635, 1485, 1659, 2091, 2432, 2952]
@@ -19,7 +20,8 @@
       "jsonl": "yoloVids/outputs/tennis11/ai11.g2.jsonl",
       "video": "yoloVids/inputs/tennis11_game2_clean.avi",
       "render_output": "game2_timeline_hypotheses.mp4",
-      "contact_review_output": "game2_serve_contact_review.html"
+      "contact_review_output": "game2_serve_contact_review.html",
+      "contact_review_include_suppressed": true
     }
   ]
 }

@@ -162,6 +162,7 @@ def config_entries(config):
     contacts = {}
     renders = {}
     contact_reviews = {}
+    contact_review_options = {}
     clip_options = {}
     for item in config.get("clips") or []:
         label = item.get("label")
@@ -187,10 +188,13 @@ def config_entries(config):
             if not os.path.isabs(output):
                 output = os.path.join(config.get("out_dir") or "", output)
             contact_reviews[label] = output
+            contact_review_options[label] = {
+                "include_suppressed": bool(item.get("contact_review_include_suppressed")),
+            }
         clip_options[label] = {
             "single_server": item.get("single_server") if "single_server" in item else None,
         }
-    return clips, manifests, contacts, renders, contact_reviews, clip_options
+    return clips, manifests, contacts, renders, contact_reviews, contact_review_options, clip_options
 
 
 def output_stem(label):
@@ -467,6 +471,19 @@ def render_clip_video(label, hypothesis_path, render_config, args):
     return output
 
 
+def render_contact_review(label, hypothesis_path, review_output, render_config, jsonl_path, options):
+    from export_serve_contact_review import export_review
+
+    export_review(
+        render_config["video"],
+        hypothesis_path,
+        review_output,
+        jsonl=jsonl_path,
+        include_suppressed=bool(options.get("include_suppressed")),
+    )
+    return review_output
+
+
 def render_output_path(render_config, args):
     output = render_config["output"]
     if not os.path.isabs(output):
@@ -484,6 +501,7 @@ def main():
         config_contacts,
         config_renders,
         config_contact_reviews,
+        config_contact_review_options,
         config_clip_options,
     ) = config_entries(config)
 
@@ -528,6 +546,15 @@ def main():
             existing_render = render_output_path(config_renders[label], args)
             if os.path.exists(existing_render):
                 rendered_videos[label] = existing_render
+        if label in config_contact_reviews and label in config_renders:
+            render_contact_review(
+                label,
+                hypothesis_path,
+                config_contact_reviews[label],
+                config_renders[label],
+                jsonl_path,
+                config_contact_review_options.get(label, {}),
+            )
 
     audit_html = os.path.join(args.out_dir, "timeline_audit.html")
     audit_json = os.path.join(args.out_dir, "timeline_audit.json")
