@@ -469,10 +469,12 @@ Ball-track recall is the bottleneck for full automation
   scoring source. On game 1 it now emits 6 hypotheses for the 6 verified points
   while retaining all 13 serve-like motions for audit; the extra motions are
   suppressed as rally evidence instead of being promoted to point starts. On
-  game 2 it produces hypotheses without ground truth. A single-game clip also
-  enforces one resolved server side, because alternating servers inside one game
-  contradicts tennis. A hypothesis report is useful for review, but feeding it
-  straight into scoring would silently invent or merge points.
+  game 2 it produces hypotheses without ground truth, and the current slice may
+  span more than one game, so mixed server sides are left visible until the
+  boundaries are verified. A known single-game clip can enforce one resolved
+  server side, because alternating servers inside one game contradicts tennis.
+  A hypothesis report is useful for review, but feeding it straight into scoring
+  would silently invent or merge points.
 Point-classification fixes (2026-08)
 These do not add bounces; they stop the classifier from inventing verdicts when
 the bounces are missing. With offline bounces and serve motions integrated,

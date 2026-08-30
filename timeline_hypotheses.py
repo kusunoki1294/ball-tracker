@@ -307,6 +307,41 @@ def motion_rank(motion):
     return (confidence_score, source_score, int(motion["contact_frame"]))
 
 
+def server_vote_weight(attempt):
+    confidence_score = {"high": 3.0, "medium": 2.0, "low": 1.0}.get(
+        attempt.get("confidence"),
+        0.0,
+    )
+    source_score = {"ball_toss": 1.0, "peak_reach": 0.4}.get(attempt.get("source"), 0.0)
+    landing = attempt.get("landing") or {}
+    landing_score = 1.0 if landing.get("bounce_id") else 0.0
+    if landing.get("result") == "in":
+        landing_score += 0.5
+    return confidence_score + source_score + landing_score
+
+
+def resolve_single_server_vote(points):
+    votes = {"near": 0.0, "far": 0.0}
+    counts = {"near": 0, "far": 0}
+    for point in points:
+        first = point["attempts"][0]
+        server = first.get("server")
+        if server not in votes:
+            continue
+        votes[server] += server_vote_weight(first)
+        counts[server] += 1
+    if not any(counts.values()):
+        return None, {"votes": votes, "counts": counts, "margin": 0.0}
+    winner = max(votes, key=lambda side: votes[side])
+    loser = "near" if winner == "far" else "far"
+    margin = round(votes[winner] - votes[loser], 3)
+    return winner, {
+        "votes": {side: round(value, 3) for side, value in votes.items()},
+        "counts": counts,
+        "margin": margin,
+    }
+
+
 def dedupe_motions(motions, fps):
     kept = []
     window = frame_window(0.75, fps)
@@ -528,29 +563,10 @@ def build_hypotheses(
         raw_points.append({"attempts": [attempt]})
 
     grouped = []
-    resolved_single_server = None
     max_second_gap = frame_window(MAX_SECOND_SERVE_GAP_SECONDS, fps)
     max_rally_continuation_gap = frame_window(RALLY_CONTINUATION_SUPPRESS_SECONDS, fps)
     for point in raw_points:
         attempt = point["attempts"][0]
-        if single_server and resolved_single_server and attempt["server"] != resolved_single_server:
-            if grouped:
-                previous_attempt = grouped[-1]["attempts"][-1]
-                evidence = second_serve_grouping_evidence(
-                    by_frame,
-                    inv_homography,
-                    previous_attempt,
-                    attempt,
-                    fps,
-                )
-                mark_suppressed_motion(
-                    attempt,
-                    grouped[-1],
-                    evidence,
-                    "suppressed_opposite_server_in_single_game",
-                    fps,
-                )
-            continue
         if grouped:
             previous = grouped[-1]
             previous_attempt = previous["attempts"][-1]
@@ -639,8 +655,36 @@ def build_hypotheses(
                 )
             attempt["previous_motion_evidence"] = second_serve_evidence
         grouped.append(point)
-        if single_server and resolved_single_server is None:
-            resolved_single_server = attempt["server"]
+
+    resolved_single_server = None
+    single_server_vote = None
+    if single_server:
+        resolved_single_server, single_server_vote = resolve_single_server_vote(grouped)
+        filtered = []
+        previous_kept = None
+        for point in grouped:
+            attempt = point["attempts"][0]
+            if resolved_single_server and attempt["server"] != resolved_single_server:
+                if previous_kept:
+                    previous_attempt = previous_kept["attempts"][-1]
+                    evidence = second_serve_grouping_evidence(
+                        by_frame,
+                        inv_homography,
+                        previous_attempt,
+                        attempt,
+                        fps,
+                    )
+                    mark_suppressed_motion(
+                        attempt,
+                        previous_kept,
+                        evidence,
+                        "suppressed_opposite_server_in_single_game",
+                        fps,
+                    )
+                continue
+            filtered.append(point)
+            previous_kept = point
+        grouped = filtered
 
     hypotheses = []
     for index, point in enumerate(grouped, start=1):
@@ -717,6 +761,7 @@ def build_hypotheses(
             ),
             "single_server": bool(single_server),
             "resolved_single_server": resolved_single_server,
+            "single_server_vote": single_server_vote,
         },
         "activity_spans": spans,
         "serve_motions": motions,

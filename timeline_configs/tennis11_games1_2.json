@@ -18,8 +18,7 @@
       "label": "game 2",
       "jsonl": "yoloVids/outputs/tennis11/ai11.g2.jsonl",
       "video": "yoloVids/inputs/tennis11_game2_clean.avi",
-      "render_output": "game2_timeline_hypotheses.mp4",
-      "single_server": true
+      "render_output": "game2_timeline_hypotheses.mp4"
     }
   ]
 }

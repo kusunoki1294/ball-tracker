@@ -80,13 +80,15 @@ def validate_outputs(output_dir):
             "suppressed_rally_motions": 6,
             "contact_recall": 1.0,
             "contact_precision": 0.538,
+            "single_server": True,
         },
         "game 2": {
-            "point_hypotheses": 7,
-            "high_confidence_hypotheses": 2,
+            "point_hypotheses": 9,
+            "high_confidence_hypotheses": 5,
             "serve_motions": 17,
-            "suppressed_rally_motions": 10,
+            "suppressed_rally_motions": 8,
             "contact_evaluation": None,
+            "single_server": False,
         },
     }
     for label, expected_values in expected.items():
@@ -106,16 +108,17 @@ def validate_outputs(output_dir):
                 errors.append(
                     f"{label}: expected {key}={expected_values[key]}, got {summary.get(key)}"
                 )
-        if summary.get("single_server") is not True:
-            errors.append(f"{label}: expected single_server=true")
+        expected_single_server = expected_values.get("single_server", False)
+        if summary.get("single_server") is not expected_single_server:
+            errors.append(f"{label}: expected single_server={expected_single_server}")
         servers = {
             (hypothesis.get("attempts") or [{}])[0].get("server")
             for hypothesis in hypotheses
             if hypothesis.get("attempts")
         }
-        if len(servers) > 1:
+        if expected_single_server and len(servers) > 1:
             errors.append(f"{label}: single-game hypotheses have mixed servers {sorted(servers)}")
-        if servers and summary.get("resolved_single_server") not in servers:
+        if expected_single_server and servers and summary.get("resolved_single_server") not in servers:
             errors.append(
                 f"{label}: resolved_single_server={summary.get('resolved_single_server')} "
                 f"does not match hypothesis servers {sorted(servers)}"
