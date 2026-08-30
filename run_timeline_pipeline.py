@@ -161,6 +161,7 @@ def config_entries(config):
     manifests = {}
     contacts = {}
     renders = {}
+    contact_reviews = {}
     clip_options = {}
     for item in config.get("clips") or []:
         label = item.get("label")
@@ -181,10 +182,15 @@ def config_entries(config):
                 "video": item["video"],
                 "output": item.get("render_output") or f"{output_stem(label)}_timeline_hypotheses.mp4",
             }
+        if item.get("contact_review_output"):
+            output = item["contact_review_output"]
+            if not os.path.isabs(output):
+                output = os.path.join(config.get("out_dir") or "", output)
+            contact_reviews[label] = output
         clip_options[label] = {
             "single_server": item.get("single_server") if "single_server" in item else None,
         }
-    return clips, manifests, contacts, renders, clip_options
+    return clips, manifests, contacts, renders, contact_reviews, clip_options
 
 
 def output_stem(label):
@@ -213,7 +219,7 @@ def rel_link(path, base_dir):
         return path
 
 
-def write_demo_index(path, title, report_clips, audit_html, audit_json, rendered_videos):
+def write_demo_index(path, title, report_clips, audit_html, audit_json, rendered_videos, contact_reviews):
     base_dir = os.path.dirname(path) or "."
     rows = []
     highlights = []
@@ -246,10 +252,16 @@ def write_demo_index(path, title, report_clips, audit_html, audit_json, rendered
         elif summary.get("resolved_single_server"):
             server_mode = f"server: {summary.get('resolved_single_server')}"
         video = rendered_videos.get(label)
+        contact_review = contact_reviews.get(label)
         video_link = (
             f'<a href="{html.escape(rel_link(video, base_dir))}">review MP4</a>'
             if video
             else "not rendered"
+        )
+        contact_review_link = (
+            f'<a href="{html.escape(rel_link(contact_review, base_dir))}">contact sheet</a>'
+            if contact_review and os.path.exists(contact_review)
+            else "not generated"
         )
         highlights.append(
             "<article>"
@@ -281,6 +293,7 @@ def write_demo_index(path, title, report_clips, audit_html, audit_json, rendered
             f"<td>{html.escape(contact)}</td>"
             f"<td><a href=\"{html.escape(rel_link(clip['path'], base_dir))}\">hypotheses JSON</a></td>"
             f"<td>{video_link}</td>"
+            f"<td>{contact_review_link}</td>"
             "</tr>"
         )
     document = f"""<!doctype html>
@@ -345,6 +358,7 @@ def write_demo_index(path, title, report_clips, audit_html, audit_json, rendered
         <th>Contact Evaluation</th>
         <th>Data</th>
         <th>Video</th>
+        <th>Contact Review</th>
       </tr>
     </thead>
     <tbody>
@@ -368,11 +382,12 @@ def write_demo_index(path, title, report_clips, audit_html, audit_json, rendered
         handle.write(document)
 
 
-def write_demo_bundle(path, demo_index, audit_html, audit_json, report_clips, rendered_videos):
+def write_demo_bundle(path, demo_index, audit_html, audit_json, report_clips, rendered_videos, contact_reviews):
     ensure_parent(path)
     files = [demo_index, audit_html, audit_json]
     files.extend(clip["path"] for clip in report_clips)
     files.extend(rendered_videos.values())
+    files.extend(contact_reviews.values())
     seen = set()
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
         for file_path in files:
@@ -380,6 +395,16 @@ def write_demo_bundle(path, demo_index, audit_html, audit_json, report_clips, re
                 continue
             seen.add(file_path)
             archive.write(file_path, arcname=os.path.basename(file_path))
+        for review_path in contact_reviews.values():
+            assets_dir = os.path.splitext(review_path)[0] + "_assets"
+            if not os.path.isdir(assets_dir):
+                continue
+            for name in sorted(os.listdir(assets_dir)):
+                file_path = os.path.join(assets_dir, name)
+                if not os.path.isfile(file_path):
+                    continue
+                arcname = os.path.join(os.path.basename(assets_dir), name)
+                archive.write(file_path, arcname=arcname)
 
 
 def bundle_output_path(args):
@@ -453,7 +478,14 @@ def main():
     args = parse_args()
     config = load_config(args.config)
     args = configured_args(args, config)
-    config_clips, config_manifests, config_contacts, config_renders, config_clip_options = config_entries(config)
+    (
+        config_clips,
+        config_manifests,
+        config_contacts,
+        config_renders,
+        config_contact_reviews,
+        config_clip_options,
+    ) = config_entries(config)
 
     clips = config_clips + [parse_label_path(raw, "--clip") for raw in args.clip]
     if not clips:
@@ -503,7 +535,15 @@ def main():
         handle.write(build_html(args.title, report_clips))
     write_json(audit_json, compact_data(report_clips))
     demo_index = os.path.join(args.out_dir, "timeline_demo.html")
-    write_demo_index(demo_index, args.title, report_clips, audit_html, audit_json, rendered_videos)
+    write_demo_index(
+        demo_index,
+        args.title,
+        report_clips,
+        audit_html,
+        audit_json,
+        rendered_videos,
+        config_contact_reviews,
+    )
     print(f"wrote {audit_html}")
     print(f"wrote {audit_json}")
     print(f"wrote {demo_index}")
@@ -516,6 +556,7 @@ def main():
             audit_json,
             report_clips,
             rendered_videos,
+            config_contact_reviews,
         )
         print(f"wrote {bundle_path}")
     print("not_scoring_truth: true")
