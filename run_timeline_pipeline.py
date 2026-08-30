@@ -216,23 +216,47 @@ def rel_link(path, base_dir):
 def write_demo_index(path, title, report_clips, audit_html, audit_json, rendered_videos):
     base_dir = os.path.dirname(path) or "."
     rows = []
+    highlights = []
     video_sections = []
     for clip in report_clips:
         label = clip["label"]
         data = clip["data"]
         summary = data.get("summary") or {}
+        manifest_eval = data.get("evaluation") or {}
         evaluation = data.get("contact_evaluation")
         contact = "no contact ground truth"
+        status = "unverified"
         if evaluation:
             contact = (
                 f"contact recall {evaluation.get('contact_recall')} "
                 f"precision {evaluation.get('contact_precision')}"
             )
+            if (
+                manifest_eval.get("truth_points")
+                and summary.get("point_hypotheses") == manifest_eval.get("truth_points")
+                and evaluation.get("contact_recall") == 1.0
+            ):
+                status = "verified contacts"
+        server_mode = "boundary unknown"
+        vote = summary.get("single_server_vote") or {}
+        if summary.get("single_server"):
+            server_mode = f"single server: {summary.get('resolved_single_server') or 'contested'}"
+            if vote:
+                server_mode += f" (margin {vote.get('margin')})"
+        elif summary.get("resolved_single_server"):
+            server_mode = f"server: {summary.get('resolved_single_server')}"
         video = rendered_videos.get(label)
         video_link = (
             f'<a href="{html.escape(rel_link(video, base_dir))}">review MP4</a>'
             if video
             else "not rendered"
+        )
+        highlights.append(
+            "<article>"
+            f"<span>{html.escape(label)}</span>"
+            f"<strong>{summary.get('point_hypotheses', '')} hypotheses</strong>"
+            f"<em>{html.escape(status)} · {html.escape(server_mode)}</em>"
+            "</article>"
         )
         if video:
             video_href = html.escape(rel_link(video, base_dir))
@@ -252,6 +276,8 @@ def write_demo_index(path, title, report_clips, audit_html, audit_json, rendered
             f"<td>{summary.get('suppressed_rally_motions', 0)}</td>"
             f"<td>{summary.get('activity_spans', '')}</td>"
             f"<td>{summary.get('serve_motions', '')}</td>"
+            f"<td>{html.escape(status)}</td>"
+            f"<td>{html.escape(server_mode)}</td>"
             f"<td>{html.escape(contact)}</td>"
             f"<td><a href=\"{html.escape(rel_link(clip['path'], base_dir))}\">hypotheses JSON</a></td>"
             f"<td>{video_link}</td>"
@@ -264,30 +290,47 @@ def write_demo_index(path, title, report_clips, audit_html, audit_json, rendered
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{html.escape(title)}</title>
   <style>
-    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 32px; color: #15191f; }}
-    .warning {{ border-left: 5px solid #d97706; background: #fff7ed; padding: 14px 16px; margin-bottom: 24px; max-width: 980px; }}
-    table {{ border-collapse: collapse; min-width: 980px; }}
+    :root {{ color-scheme: light; }}
+    * {{ box-sizing: border-box; }}
+    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; color: #15191f; background: #f4f6f8; }}
+    main {{ padding: 28px; max-width: 1320px; margin: 0 auto; }}
+    h1 {{ margin: 0 0 8px; font-size: 30px; letter-spacing: 0; }}
+    .subhead {{ margin: 0 0 18px; color: #52606d; max-width: 900px; }}
+    .warning {{ border-left: 5px solid #d97706; background: #fff7ed; padding: 14px 16px; margin-bottom: 20px; max-width: 1040px; }}
+    .actions {{ margin: 14px 0 24px; display: flex; gap: 14px; flex-wrap: wrap; }}
+    .actions a {{ background: #0f65b7; color: #fff; text-decoration: none; padding: 9px 13px; border-radius: 6px; font-weight: 650; }}
+    .actions a.secondary {{ background: #dfe6ee; color: #14212e; }}
+    .highlights {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin: 18px 0 26px; }}
+    .highlights article {{ background: #fff; border: 1px solid #d7dde5; border-radius: 8px; padding: 14px 16px; }}
+    .highlights span {{ display: block; color: #52606d; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; }}
+    .highlights strong {{ display: block; font-size: 24px; margin-top: 3px; }}
+    .highlights em {{ display: block; color: #52606d; font-style: normal; margin-top: 4px; }}
+    .table-wrap {{ overflow-x: auto; background: #fff; border: 1px solid #d7dde5; border-radius: 8px; }}
+    table {{ border-collapse: collapse; min-width: 1120px; width: 100%; }}
     th, td {{ border-bottom: 1px solid #d7dde5; padding: 10px 12px; text-align: left; vertical-align: top; }}
-    th {{ background: #f3f6fa; font-weight: 650; }}
-    .videos {{ margin-top: 28px; display: grid; gap: 24px; max-width: 1180px; }}
+    th {{ background: #f3f6fa; font-weight: 650; font-size: 13px; }}
+    .videos {{ margin-top: 28px; display: grid; gap: 24px; }}
+    .clip-video {{ background: #fff; border: 1px solid #d7dde5; border-radius: 8px; padding: 14px; }}
     .clip-video h2 {{ margin: 0 0 10px; font-size: 20px; }}
-    video {{ width: 100%; max-width: 1180px; background: #111; display: block; }}
+    video {{ width: 100%; background: #111; display: block; border-radius: 4px; }}
     a {{ color: #0f65b7; }}
   </style>
 </head>
 <body>
+<main>
   <h1>{html.escape(title)}</h1>
-  <div class="warning">
-    <strong>Timeline hypotheses are not scoring truth.</strong>
-    These artifacts show what the automated timeline layer currently believes.
+  <p class="subhead">Automated tennis timeline review for the tracked tennis11 clips.</p>
+  <div class="warning"><strong>Timeline hypotheses are not scoring truth.</strong>
     Confidence is clip-relative, serve counts are hypotheses, and point ends are inferred.
+    Game 1 has verified serve-contact checks; game 2 is boundary-unknown and unverified.</div>
+  <div class="actions">
+    <a href="{html.escape(rel_link(audit_html, base_dir))}">Detailed audit</a>
+    <a class="secondary" href="{html.escape(rel_link(audit_json, base_dir))}">Audit JSON</a>
   </div>
-  <p>
-    <a href="{html.escape(rel_link(audit_html, base_dir))}">Open detailed audit</a>
-    &nbsp;|&nbsp;
-    <a href="{html.escape(rel_link(audit_json, base_dir))}">Compact audit JSON</a>
-  </p>
-  <table>
+  <section class="highlights">
+    {''.join(highlights)}
+  </section>
+  <div class="table-wrap"><table>
     <thead>
       <tr>
         <th>Clip</th>
@@ -297,6 +340,8 @@ def write_demo_index(path, title, report_clips, audit_html, audit_json, rendered
         <th>Suppressed Rally Motions</th>
         <th>Activity Spans</th>
         <th>Serve Motions</th>
+        <th>Status</th>
+        <th>Server Mode</th>
         <th>Contact Evaluation</th>
         <th>Data</th>
         <th>Video</th>
@@ -305,7 +350,7 @@ def write_demo_index(path, title, report_clips, audit_html, audit_json, rendered
     <tbody>
       {''.join(rows)}
     </tbody>
-  </table>
+  </table></div>
   <p>
     <strong>Read observed track quality beside confidence.</strong>
     A clip can show more high-confidence hypotheses while being worse tracked;
@@ -314,6 +359,7 @@ def write_demo_index(path, title, report_clips, audit_html, audit_json, rendered
   <div class="videos">
     {''.join(video_sections)}
   </div>
+</main>
 </body>
 </html>
 """
