@@ -225,6 +225,15 @@ def confidence_color(confidence):
     return HIGH if confidence == "high" else UNCERTAIN
 
 
+def boundary_text(hypothesis):
+    status = hypothesis.get("boundary_status")
+    if status == "point_start_hypothesis_deadtime_isolated":
+        return "point-start hypothesis, deadtime isolated"
+    if status == "point_start_hypothesis_no_deadtime_evidence":
+        return "point-start hypothesis, no deadtime evidence"
+    return status or "unknown boundary"
+
+
 def active_hypothesis(hypotheses, frame):
     for item in hypotheses:
         if int(item["start_frame"]) <= frame <= int(item["end_frame"]):
@@ -265,7 +274,7 @@ def draw_panel(frame, hypothesis, frame_index, total_frames):
         f"suppressed_rally={hypothesis.get('suppressed_rally_motion_count', 0)}  "
         f"landing={landing}"
     )
-    boundary = hypothesis.get("boundary_status") or "unknown_boundary"
+    boundary = boundary_text(hypothesis)
     review = ", ".join(hypothesis.get("review_reasons") or [])
     line3 = "boundary: " + boundary + "  review: " + (review if review else "none")
     draw_text(frame, fit_text(line1, 95), (28, 98), 0.58, confidence_color(hypothesis.get("confidence")), 2)
