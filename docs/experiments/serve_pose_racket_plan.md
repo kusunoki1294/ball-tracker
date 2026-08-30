@@ -70,3 +70,39 @@ Do not add pose to the production path without first measuring it on crops:
 Next implementation slice: `serve_racket_cue_eval.py`, experiment-only. It should read existing
 JSONL and timeline outputs, write a CSV/HTML audit, and make no analyzer decision changes until
 the cue proves it separates verified contacts from known false positives.
+
+## First Experiment Result
+
+Implemented `serve_racket_cue_eval.py` and ran it on game 1 and game 2:
+
+```bash
+.venv/bin/python serve_racket_cue_eval.py \
+  --clip "game 1=yoloVids/outputs/tennis11/ai11.1.jsonl=yoloVids/outputs/tennis11/timeline/game_1_hypotheses.json" \
+  --clip "game 2=yoloVids/outputs/tennis11/ai11.g2.jsonl=yoloVids/outputs/tennis11/timeline/game_2_hypotheses.json" \
+  --verified-contacts "game 1=159,635,1485,1659,2091,2432,2952" \
+  --output-csv yoloVids/outputs/tennis11/timeline/serve_racket_cue_eval.csv \
+  --output-html yoloVids/outputs/tennis11/timeline/serve_racket_cue_eval.html
+```
+
+Summary:
+
+| bucket | n | with racket box | median ball-racket px | median server-racket px |
+| --- | ---: | ---: | ---: | ---: |
+| game 1 accepted, verified true | 7 | 7 | 23.0 | 11.6 |
+| game 1 suppressed, verified false | 6 | 5 | 40.0 | 15.5 |
+| game 2 accepted, unverified | 9 | 9 | 332.9 | 19.5 |
+| game 2 suppressed, unverified | 8 | 8 | 260.0 | 0.0 |
+
+Interpretation:
+
+- Racket boxes are present often enough to use as review/audit evidence.
+- They do not cleanly separate verified serves from known false positives on game 1.
+  A 30 px ball-racket gate would keep only 4/7 verified contacts while still keeping
+  2/5 measured suppressed false positives with ball-racket distances.
+- Far-side ball-racket distance is not comparable to near-side distance. On game 2 the
+  ball is often too small or unresolved, so the metric can report hundreds of pixels even
+  when the motion looks serve-shaped in the contact strip.
+
+Conclusion: keep racket cues as diagnostics for now. Do not wire them into serve detection
+or scoring until they are validated against labelled game-2 contacts and a larger false-positive
+set.

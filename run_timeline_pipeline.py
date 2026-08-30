@@ -234,6 +234,13 @@ def write_demo_index(
     contact_review_options,
 ):
     base_dir = os.path.dirname(path) or "."
+    racket_html = os.path.join(base_dir, "serve_racket_cue_eval.html")
+    racket_link = ""
+    if os.path.exists(racket_html):
+        racket_link = (
+            f'<a class="secondary" href="{html.escape(rel_link(racket_html, base_dir))}">'
+            "Racket cue audit</a>"
+        )
     rows = []
     highlights = []
     video_sections = []
@@ -371,6 +378,7 @@ def write_demo_index(
   <div class="actions">
     <a href="{html.escape(rel_link(audit_html, base_dir))}">Detailed audit</a>
     <a class="secondary" href="{html.escape(rel_link(audit_json, base_dir))}">Audit JSON</a>
+    {racket_link}
   </div>
   <section class="highlights">
     {''.join(highlights)}
@@ -418,6 +426,11 @@ def write_demo_index(
 def write_demo_bundle(path, demo_index, audit_html, audit_json, report_clips, rendered_videos, contact_reviews):
     ensure_parent(path)
     files = [demo_index, audit_html, audit_json]
+    out_dir = os.path.dirname(demo_index) or "."
+    files.extend(
+        os.path.join(out_dir, name)
+        for name in ("serve_racket_cue_eval.html", "serve_racket_cue_eval.csv")
+    )
     files.extend(clip["path"] for clip in report_clips)
     files.extend(rendered_videos.values())
     files.extend(contact_reviews.values())
