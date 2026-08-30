@@ -4,6 +4,10 @@
   "out_dir": "yoloVids/outputs/tennis11/timeline",
   "bundle_output": "tennis11_timeline_demo.zip",
   "fps": 30.0,
+  "racket_cue_eval": {
+    "output_csv": "serve_racket_cue_eval.csv",
+    "output_html": "serve_racket_cue_eval.html"
+  },
   "clips": [
     {
       "label": "game 1",

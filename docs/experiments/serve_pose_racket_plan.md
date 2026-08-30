@@ -96,9 +96,15 @@ Summary:
 Interpretation:
 
 - Racket boxes are present often enough to use as review/audit evidence.
-- They do not cleanly separate verified serves from known false positives on game 1.
-  A 30 px ball-racket gate would keep only 4/7 verified contacts while still keeping
-  2/5 measured suppressed false positives with ball-racket distances.
+- They are not present reliably enough to gate serve detection. Independent manual review
+  found that 2 of 7 verified game-1 serve contacts have no usable racket box, so any
+  racket-required gate would reject 29% of real serves before thresholds enter the picture.
+- They do not cleanly separate verified serves from known false positives on game 1 even
+  when present. A 30 px ball-racket gate would keep only 4/7 verified contacts while still
+  keeping 2/5 measured suppressed false positives with ball-racket distances.
+- Racket-above-head posture is useful as an audit flag, but cannot distinguish a serve from
+  a rally overhead. The known f786 rally overhead has the same racket-above-head geometry as
+  verified serves; only prior rally evidence separates it.
 - Far-side ball-racket distance is not comparable to near-side distance. On game 2 the
   ball is often too small or unresolved, so the metric can report hundreds of pixels even
   when the motion looks serve-shaped in the contact strip.

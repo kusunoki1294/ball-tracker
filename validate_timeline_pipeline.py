@@ -101,6 +101,10 @@ def validate_outputs(output_dir):
             errors.append(
                 f"{stem}: expected {expected_count} strip assets, got {count}"
             )
+    for name in ("serve_racket_cue_eval.html", "serve_racket_cue_eval.csv"):
+        path = os.path.join(output_dir, name)
+        if not os.path.exists(path):
+            errors.append(f"missing racket cue audit artifact {path}")
 
     clips = {clip["label"]: clip for clip in audit.get("clips", [])}
     expected = {

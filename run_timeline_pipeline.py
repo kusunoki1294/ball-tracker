@@ -533,6 +533,36 @@ def render_output_path(render_config, args):
     return output
 
 
+def optional_output_path(raw_output, out_dir):
+    if not raw_output:
+        return ""
+    if os.path.isabs(raw_output):
+        return raw_output
+    return os.path.join(out_dir, raw_output)
+
+
+def write_racket_cue_eval(config, report_clips, clip_jsonls, expected_contacts, out_dir):
+    eval_config = config.get("racket_cue_eval") or {}
+    if not eval_config:
+        return None
+    output_csv = optional_output_path(eval_config.get("output_csv"), out_dir)
+    output_html = optional_output_path(eval_config.get("output_html"), out_dir)
+    if not output_csv or not output_html:
+        raise ValueError("racket_cue_eval requires output_csv and output_html")
+    from serve_racket_cue_eval import build_rows, write_csv, write_html
+
+    clip_inputs = [
+        (clip["label"], clip_jsonls[clip["label"]], clip["path"])
+        for clip in report_clips
+    ]
+    rows = build_rows(clip_inputs, expected_contacts)
+    write_csv(output_csv, rows)
+    write_html(output_html, rows)
+    print(f"wrote {output_csv}")
+    print(f"wrote {output_html}")
+    return {"csv": output_csv, "html": output_html}
+
+
 def main():
     args = parse_args()
     config = load_config(args.config)
@@ -573,7 +603,9 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
     report_clips = []
     rendered_videos = {}
+    clip_jsonls = {}
     for label, jsonl_path in clips:
+        clip_jsonls[label] = jsonl_path
         result = run_clip(label, jsonl_path, args, manifests, expected_contacts, config_clip_options)
         hypothesis_path = os.path.join(args.out_dir, f"{output_stem(label)}_hypotheses.json")
         write_json(hypothesis_path, result)
@@ -597,6 +629,8 @@ def main():
                 jsonl_path,
                 config_contact_review_options.get(label, {}),
             )
+
+    write_racket_cue_eval(config, report_clips, clip_jsonls, expected_contacts, args.out_dir)
 
     audit_html = os.path.join(args.out_dir, "timeline_audit.html")
     audit_json = os.path.join(args.out_dir, "timeline_audit.json")
