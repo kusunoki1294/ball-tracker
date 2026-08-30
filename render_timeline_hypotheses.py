@@ -227,10 +227,10 @@ def confidence_color(confidence):
 
 def boundary_text(hypothesis):
     status = hypothesis.get("boundary_status")
-    if status == "point_start_hypothesis_deadtime_isolated":
-        return "point-start hypothesis, deadtime isolated"
-    if status == "point_start_hypothesis_no_deadtime_evidence":
-        return "point-start hypothesis, no deadtime evidence"
+    if status == "deadtime_evidence_for_point_start":
+        return "deadtime evidence for point start"
+    if status == "no_deadtime_evidence_for_point_start":
+        return "no deadtime evidence for point start"
     return status or "unknown boundary"
 
 

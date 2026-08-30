@@ -490,8 +490,8 @@ def confidence_for_point(attempts, isolation, fragmentation):
 
 def boundary_status(isolation):
     if isolation and isolation.get("isolated_by_deadtime"):
-        return "point_start_hypothesis_deadtime_isolated"
-    return "point_start_hypothesis_no_deadtime_evidence"
+        return "deadtime_evidence_for_point_start"
+    return "no_deadtime_evidence_for_point_start"
 
 
 def second_serve_grouping_evidence(
@@ -784,7 +784,7 @@ def build_hypotheses(
             "isolated_point_start_candidates": sum(
                 1
                 for item in hypotheses
-                if item.get("boundary_status") == "point_start_hypothesis_deadtime_isolated"
+                if item.get("boundary_status") == "deadtime_evidence_for_point_start"
             ),
             "high_confidence_hypotheses": sum(1 for item in hypotheses if item["confidence"] == "high"),
             "uncertain_hypotheses": sum(1 for item in hypotheses if item["confidence"] == "uncertain"),

@@ -71,10 +71,10 @@ def landing_summary(hypothesis):
 
 def boundary_summary(hypothesis):
     status = hypothesis.get("boundary_status")
-    if status == "point_start_hypothesis_deadtime_isolated":
-        return "point-start hypothesis; dead-time isolated"
-    if status == "point_start_hypothesis_no_deadtime_evidence":
-        return "point-start hypothesis; no dead-time evidence"
+    if status == "deadtime_evidence_for_point_start":
+        return "dead-time evidence for point start"
+    if status == "no_deadtime_evidence_for_point_start":
+        return "no dead-time evidence for point start"
     return status or "unknown"
 
 
