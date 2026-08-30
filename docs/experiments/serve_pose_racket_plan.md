@@ -96,12 +96,22 @@ Summary:
 Interpretation:
 
 - Racket boxes are present often enough to use as review/audit evidence.
-- They are not present reliably enough to gate serve detection. Independent manual review
-  found that 2 of 7 verified game-1 serve contacts have no usable racket box, so any
-  racket-required gate would reject 29% of real serves before thresholds enter the picture.
+- They are not usable reliably enough to gate serve detection. Independent manual review
+  found that on 2 of 7 verified game-1 serve contacts, a racket box exists in the frame
+  but is not the server's ball-contact racket: the nearest racket sits 227.7 px and
+  286.7 px from the ball. Any server-racket-required gate would reject 29% of real serves
+  before thresholds enter the picture.
 - They do not cleanly separate verified serves from known false positives on game 1 even
   when present. A 30 px ball-racket gate would keep only 4/7 verified contacts while still
   keeping 2/5 measured suppressed false positives with ball-racket distances.
+- Normalizing the posture cue does not rescue it:
+
+  | cue | verified true | known false positives |
+  | --- | --- | --- |
+  | `racket_above_server_top_frac` | -0.181, -0.169, -0.087, -0.009, 0.069, 0.166, 0.167 | -4.713, -0.184, -0.086, -0.069, 0.143 |
+
+  Keeping all verified contacts would admit all measured false positives, so the failure is
+  not just raw-pixel scale dependence.
 - Racket-above-head posture is useful as an audit flag, but cannot distinguish a serve from
   a rally overhead. The known f786 rally overhead has the same racket-above-head geometry as
   verified serves; only prior rally evidence separates it.
@@ -111,4 +121,5 @@ Interpretation:
 
 Conclusion: keep racket cues as diagnostics for now. Do not wire them into serve detection
 or scoring until they are validated against labelled game-2 contacts and a larger false-positive
-set.
+set. This experiment is enough to disqualify racket gating on the current evidence; it does
+not prove that racket cues carry no information at all.
