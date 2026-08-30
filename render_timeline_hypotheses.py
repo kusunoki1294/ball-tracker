@@ -298,7 +298,7 @@ def draw_timeline(frame, hypotheses, frame_index, total_frames):
         cv2.line(frame, (x1, y), (max(x1 + 1, x2), y), color, thickness)
     cursor_x = left + int((right - left) * (frame_index - 1) / max(1, total_frames - 1))
     cv2.line(frame, (cursor_x, y - 18), (cursor_x, y + 18), (255, 255, 255), 2)
-    draw_text(frame, "timeline hypotheses", (left, y - 24), 0.42, MUTED, 1)
+    draw_text(frame, "padded review windows, not point extents", (left, y - 24), 0.42, MUTED, 1)
 
 
 def draw_contact_events(frame, events, frame_index):

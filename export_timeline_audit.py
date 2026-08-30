@@ -88,12 +88,12 @@ def hypothesis_rows(data):
         rows.append(
             "<tr class='conf-{cls}'>"
             "<td>{id}</td>"
+            "<td class='num'>f{contact}</td>"
             "<td class='num'>f{start}–f{end}{end_note}</td>"
             "<td>{conf} <span class='score'>{score}</span></td>"
             "<td>{boundary}</td>"
             "<td>{server}</td>"
             "<td class='num'>{serves}</td>"
-            "<td class='num'>f{contact}</td>"
             "<td>{landing}</td>"
             "<td class='num'>{suppressed}</td>"
             "<td class='num'>{dead}</td>"
@@ -164,8 +164,8 @@ def clip_section(clip):
   {contact_block(data)}
   <table>
     <thead><tr>
-      <th>hypothesis</th><th>frames</th><th>confidence</th><th>boundary status</th>
-      <th>server</th><th>serves<sup>†</sup></th><th>first contact</th><th>serve landing</th>
+      <th>hypothesis</th><th>contact</th><th>padded review window</th><th>confidence</th><th>boundary status</th>
+      <th>server</th><th>serves<sup>†</sup></th><th>serve landing</th>
       <th>suppressed rally motions</th><th>dead frames before</th><th>nearby spans</th><th>reasons</th><th>review reasons</th>
     </tr></thead>
     <tbody>
@@ -269,8 +269,9 @@ def build_html(title, clips):
   <p>Nothing here has been scored. This report reads only timeline hypothesis output and
   deliberately does not read analysis JSON, so it cannot show hypotheses as if they were
   adjudicated points. Point <em>ends</em> in particular are inferred from ball activity and have
-  no ground truth at all. "No dead-time evidence" means the boundary lacks that
-  specific corroboration; it does not mean the serve-contact detection is wrong.</p>
+  no ground truth at all. Start/end ranges are padded, overlapping review windows,
+  not point extents. "No dead-time evidence" means the boundary lacks that specific
+  corroboration; it does not mean the serve-contact detection is wrong.</p>
 </div>
 {sections}
 {comparison_section(clips)}
