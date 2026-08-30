@@ -739,6 +739,7 @@ def build_hypotheses(
         hypotheses.append(
             {
                 "id": f"point_hypothesis_{index:03d}",
+                "display_id": f"serve_motion_hypothesis_{index:03d}",
                 "start_frame": start_frame,
                 "end_frame": end_frame,
                 "start_source": "serve_contact_minus_1.5s",

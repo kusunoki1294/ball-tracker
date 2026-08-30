@@ -256,7 +256,7 @@ def draw_panel(frame, hypothesis, frame_index, total_frames):
     first = (hypothesis.get("attempts") or [{}])[0]
     landing = (first.get("landing") or {}).get("reason") or "unknown"
     line1 = (
-        f"{hypothesis.get('id')}  {hypothesis.get('confidence')} "
+        f"{hypothesis.get('display_id') or hypothesis.get('id')}  {hypothesis.get('confidence')} "
         f"score={hypothesis.get('confidence_score')}  server={first.get('server')}"
     )
     line2 = (
@@ -297,7 +297,7 @@ def draw_contact_events(frame, events, frame_index):
     for offset, (hypothesis, attempt) in enumerate(current):
         y = 194 + (offset * 26)
         text = (
-            f"{hypothesis.get('id')} serve contact "
+            f"{hypothesis.get('display_id') or hypothesis.get('id')} serve contact "
             f"attempt {attempt.get('attempt')} ({attempt.get('source')})"
         )
         draw_text(frame, fit_text(text, 90), (28, y), 0.55, confidence_color(hypothesis.get("confidence")), 2)

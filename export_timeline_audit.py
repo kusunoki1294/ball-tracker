@@ -93,7 +93,7 @@ def hypothesis_rows(data):
             "<td class='reasons'>{review}</td>"
             "</tr>".format(
                 cls=esc(hypothesis.get("confidence", "uncertain")),
-                id=esc(hypothesis.get("id")),
+                id=esc(hypothesis.get("display_id") or hypothesis.get("id")),
                 start=esc(hypothesis.get("start_frame")),
                 end=esc(hypothesis.get("end_frame")),
                 end_note=end_note,
@@ -281,6 +281,7 @@ def compact_data(clips):
                 "hypotheses": [
                     {
                         "id": item.get("id"),
+                        "display_id": item.get("display_id"),
                         "start_frame": item.get("start_frame"),
                         "end_frame": item.get("end_frame"),
                         "ends_have_no_truth": item.get("ends_have_no_truth"),

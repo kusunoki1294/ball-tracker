@@ -170,7 +170,7 @@ def write_html(path, title, contacts, assets_dir, source_video, source_json):
             )
         cards.append(
             "<article>"
-            f"<h2>{esc(hypothesis.get('id'))} · f{frame}</h2>"
+            f"<h2>{esc(hypothesis.get('display_id') or hypothesis.get('id'))} · f{frame}</h2>"
             f"<p><strong>{esc(kind)}</strong> · claimed server {esc(attempt.get('server'))} · "
             f"{esc(attempt.get('source'))} · {esc(attempt.get('confidence'))}</p>"
             f"<div class=\"strip\">{''.join(strip)}</div>"
