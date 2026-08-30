@@ -389,11 +389,11 @@ choose which player to measure reach against, nor to reject a candidate outright
 
 Automated timeline hypotheses (2026-08): `timeline_hypotheses.py`
 The automated path deliberately stops short of scoring. It turns tracked JSONL
-logs into point-like hypotheses, then exports a report that keeps uncertainty
+logs into serve-motion hypotheses, then exports a report that keeps uncertainty
 visible: confidence is clip-relative, `serve_count` is a hypothesis, point ends
 are inferred from activity rather than observed, and the compact JSON is marked
 `not_scoring_truth: true`. Serve-like motions seen inside an active rally are
-suppressed as review evidence instead of emitted as new point starts.
+suppressed as review evidence instead of emitted as a new serve-motion hypothesis.
 
 One command regenerates the current tennis11 hypothesis audit from the tracked
 game-1 and game-2 logs:
@@ -413,6 +413,8 @@ Outputs:
 - `timeline_demo.html` as the entry point for show-and-review.
 - `timeline_audit.html` for human review.
 - `timeline_audit.json` for a compact machine-readable audit.
+- `*_serve_contact_review.html` plus crop strips around each serve contact.
+- `serve_racket_cue_eval.html` and `.csv` for the current racket-cue negative result.
 - Configured hypothesis overlay MP4s when `--render-videos` is passed.
 - `tennis11_timeline_demo.zip` when `--bundle-demo` is passed.
 
@@ -439,7 +441,7 @@ OpenCV implementation.
 Render a hypothesis-only overlay video for visual review:
 
     .venv/bin/python render_timeline_hypotheses.py \
-      --video yoloVids/inputs/tennis11_game1_clean.avi \
+      --video yoloVids/inputs/tennis11_game1.mp4 \
       --hypotheses yoloVids/outputs/tennis11/timeline/game_1_hypotheses.json \
       --output yoloVids/outputs/tennis11/timeline/game1_timeline_hypotheses.mp4
 
@@ -448,7 +450,9 @@ The renderer also reads only timeline hypothesis JSON. It draws an explicit
 reasons, and a bottom timeline bar. MP4 output is preferred for size; AVI is a
 fallback. If OpenCV cannot open a source video, the renderer falls back to
 ffmpeg frame decoding and prints periodic progress so long review renders do not
-look hung.
+look hung. The serve-contact review exporter uses the same streaming reader, so
+the full demo pipeline still works when OpenCV's video backend cannot decode the
+configured source video.
 
 `eval_bounce_detect.py` also reports an ANCHORING HAZARD: detections closer to a
 serve strike than the minimum flight time. Those are the strike itself, and a
