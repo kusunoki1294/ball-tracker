@@ -415,12 +415,17 @@ Outputs:
 - `timeline_audit.json` for a compact machine-readable audit.
 - `*_serve_contact_review.html` plus crop strips around each serve contact.
 - `serve_racket_cue_eval.html` and `.csv` for the current racket-cue negative result.
+- `tennis11_demo_guide.md` copied into the output directory and linked from the demo page.
 - Configured hypothesis overlay MP4s when `--render-videos` is passed.
 - `tennis11_timeline_demo.zip` when `--bundle-demo` is passed.
 
 The zip is the shareable demo unit. The loose HTML uses relative links to the
 MP4 files beside it, so sending `timeline_demo.html` by itself will produce
 broken video players.
+
+The demo front page also carries review priorities: the known game-1 f786
+suppression control, plus the game-2 f623/f3506/f4183 suppressed serve candidates
+that need human review.
 
 The optional manifest and expected-contact inputs are evaluation only. They do
 not feed scoring and do not create manifest-shaped `point_frames`. Game 1 has
