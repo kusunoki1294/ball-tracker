@@ -25,6 +25,7 @@
         {
           "frame": 786,
           "kind": "known suppressed non-serve control",
+          "trail_start_frame": 635,
           "note": "High-confidence ball_toss suppression that manual review confirmed is a rally overhead, not a serve."
         }
       ]
@@ -61,28 +62,28 @@
         },
         {
           "frame": 257,
-          "kind": "accepted non-serve control",
-          "note": "Pre-roll shows the near player serving first; the far contact is the return, not a serve."
+          "kind": "accepted far-side reviewer read",
+          "note": "Unconfirmed read from difficult far-court footage: appears to be the return of the near serve, not a serve."
         },
         {
           "frame": 408,
-          "kind": "suppressed non-serve control",
-          "note": "Far-side rally shot: waist/chest-height contact while moving, no toss or overhead extension."
+          "kind": "suppressed far-side reviewer read",
+          "note": "Unconfirmed read: waist/chest-height contact while moving, no clear toss or overhead extension."
         },
         {
           "frame": 2116,
-          "kind": "accepted non-serve control",
-          "note": "Far-side rally shot incorrectly accepted as a serve-motion hypothesis."
+          "kind": "accepted far-side reviewer read",
+          "note": "Unconfirmed read: far-side rally shot likely accepted as a serve-motion hypothesis."
         },
         {
           "frame": 2629,
-          "kind": "accepted non-serve control",
-          "note": "Far-side lateral rally contact incorrectly accepted as a serve-motion hypothesis."
+          "kind": "accepted far-side reviewer read",
+          "note": "Unconfirmed read: far-side lateral contact likely accepted as a serve-motion hypothesis."
         },
         {
           "frame": 3154,
-          "kind": "accepted non-serve control",
-          "note": "Far-side leaning rally contact; no service motion in the pre-roll."
+          "kind": "accepted far-side reviewer read",
+          "note": "Unconfirmed read: far-side leaning contact with no clear service motion in the pre-roll."
         }
       ]
     }

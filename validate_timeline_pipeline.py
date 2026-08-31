@@ -189,6 +189,8 @@ def validate_outputs(output_dir):
             preroll = handle.read()
         if "image-space tracked-ball trail" not in preroll or "tracked coverage" not in preroll:
             errors.append("pre-roll review must explain image-space trail and coverage semantics")
+        if "trail interval: f635-f786" not in preroll:
+            errors.append("pre-roll f786 control must use the previous-contact interval")
     if os.path.exists(preroll_path) and not os.path.isdir(preroll_assets):
         errors.append(f"missing pre-roll review assets {preroll_assets}")
     elif os.path.isdir(preroll_assets):
@@ -210,7 +212,6 @@ def validate_outputs(output_dir):
             "high_confidence_hypotheses": 1,
             "serve_motions": 13,
             "suppressed_rally_motions": 6,
-            "top_band_large_ball_detections": 0,
             "contact_recall": 1.0,
             "contact_precision": 0.538,
             "single_server": True,
@@ -221,7 +222,6 @@ def validate_outputs(output_dir):
             "high_confidence_hypotheses": 5,
             "serve_motions": 17,
             "suppressed_rally_motions": 8,
-            "top_band_large_ball_detections": 159,
             "accepted_serve_fraction": 0.556,
             "suppressed_verified_serves": 4,
             "contact_evaluation": None,
@@ -241,7 +241,6 @@ def validate_outputs(output_dir):
             "high_confidence_hypotheses",
             "serve_motions",
             "suppressed_rally_motions",
-            "top_band_large_ball_detections",
         ):
             if summary.get(key) != expected_values[key]:
                 errors.append(

@@ -35,14 +35,11 @@ Good current claim:
 - Game 1 has zero spurious accepted serve-motion hypotheses after suppression.
 - Game 2 is unverified but useful as a harder generalization clip: worse ball
   observation, 9 accepted serve-motion hypotheses, and 8 suppressed motions.
-- A source-video label pass says every real game-2 serve is from the near end:
-  accepted far-side contacts are rally shots, while four real near-side serves
-  (`f623`, `f2517`, `f3506`, `f4183`) sit in the suppressed set.
+- A source-video label pass says the four suppressed near-side contacts
+  (`f623`, `f2517`, `f3506`, `f4183`) are real serves. The far-side non-serve
+  reads are lower confidence because the far player is small in frame.
 - The detailed audit reports this as contact-label evidence: 5 of 9 accepted
   game-2 contacts are labelled serves, and 4 labelled serves are suppressed.
-- Game 2 also has a tracker anomaly absent from game 1: 159 large ball
-  detections in the top image band, consistent with the f183 phantom-ball
-  diagnosis. Treat game-2 ball-derived landings as review evidence, not truth.
 - The front-page review priorities show both failure classes: verified
   suppressed serves and far-side non-serve controls.
 
@@ -53,9 +50,9 @@ Do not claim:
 - Verified game-2 source timestamps. Game 2's clip start is recorded from the
   cut command, but unlike game 1 it has not yet been pinned to a hand-verified
   contact in the full source video.
-- That game-2 ball-track evidence is clean. The demo now surfaces top-band
-  large-ball anomalies precisely because the tracker can lock onto non-ball
-  objects in that clip.
+- That game-2 ball-track evidence is clean. Ball-derived landings are still
+  review evidence, and the contact labels are the stronger source for whether a
+  frame is a serve.
 - That the colored timeline bars are point extents. They are padded review
   windows around serve-motion hypotheses.
 - That racket cues solve serve detection. The racket audit says they are useful
@@ -73,9 +70,9 @@ Do not claim:
 - `game2_serve_contact_review.html`: crop strips for 9 accepted and 8 suppressed
   game-2 contacts.
 - `timeline_preroll_review.html`: full-court pre-roll trail cards for f786 plus
-  the game-2 suppressed serves and far-side non-serve controls. The trail is
-  drawn in image space, not ground-projected court space, and each card reports
-  how much of the previous two seconds actually had a tracked ball.
+  the game-2 suppressed serves and far-side reviewer reads. The trail is drawn
+  in image space, not ground-projected court space, dots preserve tracked bbox
+  size, and each card reports how much of the interval had a tracked ball.
 - `serve_racket_cue_eval.html`: why current YOLO racket boxes should stay audit
   evidence only.
 

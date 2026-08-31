@@ -181,7 +181,6 @@ def clip_section(clip):
     <div><span class='k'>suppressed rally motions</span><span class='v'>{esc(summary.get('suppressed_rally_motions', 0))}</span></div>
     <div><span class='k'>activity spans</span><span class='v'>{esc(summary.get('activity_spans'))}</span></div>
     <div><span class='k'>distinct real observations</span><span class='v'>{esc(summary.get('distinct_real_observations_pct'))}%</span></div>
-    <div><span class='k'>top-band large ball detections</span><span class='v'>{esc(summary.get('top_band_large_ball_detections'))}</span></div>
   </div>
   {contact_block(data)}
   <table>
@@ -213,7 +212,6 @@ def comparison_section(clips):
         ("activity spans", "activity_spans"),
         ("frames with a ball %", "frames_with_ball_pct"),
         ("distinct real observations %", "distinct_real_observations_pct"),
-        ("top-band large ball detections", "top_band_large_ball_detections"),
     ]
     rows = []
     for label, key in metrics:

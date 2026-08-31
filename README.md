@@ -427,7 +427,7 @@ broken video players.
 
 The demo front page also carries review priorities: the known game-1 f786
 suppression control, plus game-2 verified suppressed serves and far-side
-non-serve controls with tracked-ball trails in the two seconds before contact.
+reviewer reads with image-space tracked-ball trails before contact.
 
 The optional manifest and expected-contact inputs are evaluation only. They do
 not feed scoring and do not create manifest-shaped `point_frames`. Game 1 has
@@ -481,16 +481,14 @@ Ball-track recall is the bottleneck for full automation
   while retaining all 13 serve-like motions for audit; the extra motions are
   suppressed as rally evidence instead of being promoted to point starts. On
   game 2 it produces hypotheses without point-boundary ground truth. A later
-  source-video label pass found accepted far-side contacts are rally shots, not
-  serves, while four real near-side serves sit in the suppressed set. Game 2
-  also has 159 top-band large-ball detections, an explicit tracker-anomaly
-  signal matching the f183 phantom-ball diagnosis. The demo exposes these as
-  review evidence rather than converting them into scoring truth. A known
-  single-game clip can enforce one resolved server side, because alternating
-  servers inside one game contradicts tennis; that resolution is vote-based and
-  abstains on close votes instead of suppressing points on a thin margin. A
-  hypothesis report is useful for review, but feeding it straight into scoring
-  would silently invent or merge points.
+  source-video label pass found four real near-side serves in the suppressed
+  set, while accepted far-side contacts are lower-confidence reviewer reads. The
+  demo exposes these as review evidence rather than converting them into scoring
+  truth. A known single-game clip can enforce one resolved server side, because
+  alternating servers inside one game contradicts tennis; that resolution is
+  vote-based and abstains on close votes instead of suppressing points on a thin
+  margin. A hypothesis report is useful for review, but feeding it straight into
+  scoring would silently invent or merge points.
 Point-classification fixes (2026-08)
 These do not add bounces; they stop the classifier from inventing verdicts when
 the bounces are missing. With offline bounces and serve motions integrated,

@@ -1,8 +1,8 @@
 """Export pre-roll trajectory cards for timeline review-priority frames.
 
 The serve/contact crop sheet shows whether a strike happened. This artifact shows
-the tracked ball trail from the two seconds before selected contacts, because
-that is the evidence that separates a true serve from a mid-rally overhead.
+the tracked ball trail before selected contacts, because that is the evidence
+that separates a true serve from a mid-rally overhead.
 """
 
 import argparse
@@ -97,6 +97,14 @@ def ball_center(row):
     return None
 
 
+def ball_size(row):
+    ball = (row or {}).get("ball") or {}
+    bbox = ball.get("bbox")
+    if bbox and len(bbox) == 4:
+        return max(float(bbox[2]) - float(bbox[0]), float(bbox[3]) - float(bbox[1]))
+    return None
+
+
 def resize_frame(frame):
     height, width = frame.shape[:2]
     scale = OUTPUT_WIDTH / float(width)
@@ -133,22 +141,24 @@ def draw_trail(image, points, scale):
             cv2.LINE_AA,
         )
         return
-    scaled = [
-        (frame, int(round(center[0] * scale)), int(round(center[1] * scale)))
-        for frame, center in points
-    ]
+    scaled = []
+    for frame, center, size in points:
+        radius = 3
+        if size is not None:
+            radius = max(2, int(round(size * scale / 2.0)))
+        scaled.append((frame, int(round(center[0] * scale)), int(round(center[1] * scale)), radius))
     for index in range(1, len(scaled)):
         color = trail_color(index, len(scaled))
-        _, x0, y0 = scaled[index - 1]
-        _, x1, y1 = scaled[index]
+        _, x0, y0, _ = scaled[index - 1]
+        _, x1, y1, _ = scaled[index]
         cv2.line(image, (x0, y0), (x1, y1), color, 2, cv2.LINE_AA)
-    for index, (_, x, y) in enumerate(scaled):
+    for index, (_, x, y, radius) in enumerate(scaled):
         color = trail_color(index, len(scaled))
-        cv2.circle(image, (x, y), 4, BALL_OUTLINE, -1, cv2.LINE_AA)
-        cv2.circle(image, (x, y), 3, color, -1, cv2.LINE_AA)
-    _, x, y = scaled[-1]
-    cv2.circle(image, (x, y), 8, BALL_OUTLINE, 3, cv2.LINE_AA)
-    cv2.circle(image, (x, y), 8, TRAIL_END, 2, cv2.LINE_AA)
+        cv2.circle(image, (x, y), radius + 1, BALL_OUTLINE, -1, cv2.LINE_AA)
+        cv2.circle(image, (x, y), radius, color, -1, cv2.LINE_AA)
+    _, x, y, radius = scaled[-1]
+    cv2.circle(image, (x, y), radius + 5, BALL_OUTLINE, 3, cv2.LINE_AA)
+    cv2.circle(image, (x, y), radius + 5, TRAIL_END, 2, cv2.LINE_AA)
 
 
 def write_trail_frame(image, path, points):
@@ -192,9 +202,10 @@ def asset_name(card_index, frame):
 def tracked_points(by_frame, start_frame, end_frame):
     points = []
     for frame in range(start_frame, end_frame + 1):
-        center = ball_center(by_frame.get(frame))
+        row = by_frame.get(frame)
+        center = ball_center(row)
         if center:
-            points.append((frame, center))
+            points.append((frame, center, ball_size(row)))
     return points
 
 
@@ -212,7 +223,11 @@ def export_review(clips, output):
         for item in clip["items"]:
             card_index += 1
             frame = int(item["frame"])
+            interval_source = "fixed 2-second window"
             start_frame = max(1, frame - WINDOW_FRAMES)
+            if item.get("trail_start_frame") is not None:
+                start_frame = max(1, int(item["trail_start_frame"]))
+                interval_source = "previous accepted contact interval"
             points = tracked_points(by_frame, start_frame, frame)
             tracked = len(points)
             total = frame - start_frame + 1
@@ -230,10 +245,11 @@ def export_review(clips, output):
                 "<article>"
                 f"<h2>{esc(clip['label'])} f{frame}</h2>"
                 f"<p><strong>{esc(item.get('kind'))}</strong> — {esc(item.get('note'))}</p>"
-                f"<p class=\"coverage\">tracked coverage: {tracked}/{total} frames ({coverage}%)</p>"
+                f"<p class=\"coverage\">trail interval: f{start_frame}-f{frame} "
+                f"({esc(interval_source)}); tracked coverage: {tracked}/{total} frames ({coverage}%)</p>"
                 "<figure class=\"trail\">"
                 f"<img src=\"{esc(rel)}\" alt=\"{esc(clip['label'])} tracked-ball trail ending at frame {frame}\">"
-                "<figcaption>blue = oldest tracked ball, red ring = latest tracked ball before/contact frame</figcaption>"
+                "<figcaption>blue = oldest tracked ball, red ring = latest tracked ball; dot size follows tracked bbox size</figcaption>"
                 "</figure>"
                 "</article>"
             )
@@ -265,9 +281,10 @@ def export_review(clips, output):
   <h1>Timeline Pre-Roll Review</h1>
   <div class="notice"><strong>Review artifact only.</strong> Contact posture alone cannot
   distinguish a serve from a rally overhead. Each card overlays an image-space tracked-ball trail
-  from the previous two seconds on the contact frame. The trail deliberately does not use
-  ground-projected court side, because airborne balls make that projection unreliable.
-  Read the tracked coverage line before trusting missing trail segments.</div>
+  on the contact frame. Controls with a known previous contact use that full interval; other cards
+  fall back to the previous two seconds. The trail deliberately does not use ground-projected court
+  side, because airborne balls make that projection unreliable. Read the tracked coverage line before
+  trusting missing trail segments.</div>
   <section class="grid">{''.join(cards)}</section>
 </body>
 </html>
