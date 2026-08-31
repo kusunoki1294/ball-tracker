@@ -414,6 +414,8 @@ Outputs:
 - `timeline_audit.html` for human review.
 - `timeline_audit.json` for a compact machine-readable audit.
 - `*_serve_contact_review.html` plus crop strips around each serve contact.
+- `timeline_preroll_review.html` plus full-court pre-roll strips for front-page
+  review priorities.
 - `serve_racket_cue_eval.html` and `.csv` for the current racket-cue negative result.
 - `tennis11_demo_guide.md` copied into the output directory and linked from the demo page.
 - Configured hypothesis overlay MP4s when `--render-videos` is passed.

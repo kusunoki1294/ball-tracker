@@ -130,6 +130,8 @@ def validate_outputs(output_dir):
             errors.append("timeline demo must label game 2 contact review contents")
         if "tennis11_demo_guide.md" not in demo:
             errors.append("timeline demo must link the demo guide")
+        if "timeline_preroll_review.html" not in demo:
+            errors.append("timeline demo must link the pre-roll review")
         for frame in ("f786", "f623", "f3506", "f4183"):
             if frame not in demo:
                 errors.append(f"timeline demo must surface review priority {frame}")
@@ -167,6 +169,22 @@ def validate_outputs(output_dir):
     guide_path = os.path.join(output_dir, "tennis11_demo_guide.md")
     if not os.path.exists(guide_path):
         errors.append(f"missing copied demo guide {guide_path}")
+    preroll_path = os.path.join(output_dir, "timeline_preroll_review.html")
+    preroll_assets = os.path.join(output_dir, "timeline_preroll_review_assets")
+    if not os.path.exists(preroll_path):
+        errors.append(f"missing pre-roll review {preroll_path}")
+    elif not os.path.isdir(preroll_assets):
+        errors.append(f"missing pre-roll review assets {preroll_assets}")
+    else:
+        count = len(
+            [
+                name
+                for name in os.listdir(preroll_assets)
+                if name.startswith("preroll_") and name.lower().endswith(".jpg")
+            ]
+        )
+        if count != 28:
+            errors.append(f"expected 28 pre-roll assets, got {count}")
 
     clips = {clip["label"]: clip for clip in audit.get("clips", [])}
     expected = {

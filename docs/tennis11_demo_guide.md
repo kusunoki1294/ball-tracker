@@ -62,6 +62,8 @@ Do not claim:
   contacts.
 - `game2_serve_contact_review.html`: crop strips for 9 accepted and 8 suppressed
   game-2 contacts.
+- `timeline_preroll_review.html`: full-court pre-roll strips for f786 plus the
+  three game-2 suppressed serve candidates.
 - `serve_racket_cue_eval.html`: why current YOLO racket boxes should stay audit
   evidence only.
 

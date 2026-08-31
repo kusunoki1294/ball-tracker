@@ -272,6 +272,7 @@ def write_demo_index(
     review_priorities,
     fps,
     demo_guide,
+    preroll_review,
 ):
     base_dir = os.path.dirname(path) or "."
     racket_html = os.path.join(base_dir, "serve_racket_cue_eval.html")
@@ -286,6 +287,12 @@ def write_demo_index(
         guide_link = (
             f'<a class="secondary" href="{html.escape(rel_link(demo_guide, base_dir))}">'
             "Demo guide</a>"
+        )
+    preroll_link = ""
+    if preroll_review and os.path.exists(preroll_review):
+        preroll_link = (
+            f'<a class="secondary" href="{html.escape(rel_link(preroll_review, base_dir))}">'
+            "Pre-roll review</a>"
         )
     rows = []
     highlights = []
@@ -450,6 +457,7 @@ def write_demo_index(
     <a class="secondary" href="{html.escape(rel_link(audit_json, base_dir))}">Audit JSON</a>
     {racket_link}
     {guide_link}
+    {preroll_link}
   </div>
   <section class="highlights">
     {''.join(highlights)}
@@ -504,11 +512,14 @@ def write_demo_bundle(
     rendered_videos,
     contact_reviews,
     demo_guide,
+    preroll_review,
 ):
     ensure_parent(path)
     files = [demo_index, audit_html, audit_json]
     if demo_guide:
         files.append(demo_guide)
+    if preroll_review:
+        files.append(preroll_review)
     out_dir = os.path.dirname(demo_index) or "."
     files.extend(
         os.path.join(out_dir, name)
@@ -534,6 +545,15 @@ def write_demo_bundle(
                     continue
                 arcname = os.path.join(os.path.basename(assets_dir), name)
                 archive.write(file_path, arcname=arcname)
+        if preroll_review:
+            assets_dir = os.path.splitext(preroll_review)[0] + "_assets"
+            if os.path.isdir(assets_dir):
+                for name in sorted(os.listdir(assets_dir)):
+                    file_path = os.path.join(assets_dir, name)
+                    if not os.path.isfile(file_path):
+                        continue
+                    arcname = os.path.join(os.path.basename(assets_dir), name)
+                    archive.write(file_path, arcname=arcname)
 
 
 def bundle_output_path(args):
@@ -646,6 +666,30 @@ def write_racket_cue_eval(config, report_clips, clip_jsonls, expected_contacts, 
     return {"csv": output_csv, "html": output_html}
 
 
+def write_preroll_review(config_renders, review_priorities, out_dir):
+    clips = []
+    for label, priority_config in review_priorities.items():
+        render_config = config_renders.get(label)
+        if not render_config:
+            continue
+        items = priority_config.get("items") or []
+        if items:
+            clips.append(
+                {
+                    "label": label,
+                    "video": render_config["video"],
+                    "items": items,
+                }
+            )
+    if not clips:
+        return ""
+    output = os.path.join(out_dir, "timeline_preroll_review.html")
+    from export_timeline_preroll_review import export_review
+
+    export_review(clips, output)
+    return output
+
+
 def main():
     args = parse_args()
     config = load_config(args.config)
@@ -716,6 +760,11 @@ def main():
 
     write_racket_cue_eval(config, report_clips, clip_jsonls, expected_contacts, args.out_dir)
     demo_guide = copy_demo_guide(config, args.out_dir)
+    preroll_review = write_preroll_review(
+        config_renders,
+        config_review_priorities,
+        args.out_dir,
+    )
 
     audit_html = os.path.join(args.out_dir, "timeline_audit.html")
     audit_json = os.path.join(args.out_dir, "timeline_audit.json")
@@ -735,6 +784,7 @@ def main():
         config_review_priorities,
         args.fps,
         demo_guide,
+        preroll_review,
     )
     print(f"wrote {audit_html}")
     print(f"wrote {audit_json}")
@@ -750,6 +800,7 @@ def main():
             rendered_videos,
             config_contact_reviews,
             demo_guide,
+            preroll_review,
         )
         print(f"wrote {bundle_path}")
     print("not_scoring_truth: true")
