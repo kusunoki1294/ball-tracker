@@ -35,11 +35,17 @@ Good current claim:
 - Game 1 has zero spurious accepted serve-motion hypotheses after suppression.
 - Game 2 is unverified but useful as a harder generalization clip: worse ball
   observation, mixed near/far serves, and 9 accepted serve-motion hypotheses.
+- Game 2 has four front-page review priorities: one known game-1 suppression
+  control (`f786`) and three game-2 suppressed serve candidates (`f623`,
+  `f3506`, `f4183`) that need human eyes.
 
 Do not claim:
 
 - Full automatic scoring.
 - Verified game-2 point boundaries.
+- Verified game-2 source timestamps. Game 2's clip start is recorded from the
+  cut command, but unlike game 1 it has not yet been pinned to a hand-verified
+  contact in the full source video.
 - That the colored timeline bars are point extents. They are padded review
   windows around serve-motion hypotheses.
 - That racket cues solve serve detection. The racket audit says they are useful
@@ -75,4 +81,3 @@ Validation:
 .venv/bin/python validate_serve_detection.py
 .venv/bin/python validate_tennis9_regression.py
 ```
-
