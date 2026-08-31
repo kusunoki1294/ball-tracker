@@ -15,9 +15,18 @@
       "video": "yoloVids/inputs/tennis11_game1.mp4",
       "render_output": "game1_timeline_hypotheses.mp4",
       "contact_review_output": "game1_serve_contact_review.html",
+      "contact_review_include_suppressed": true,
       "single_server": true,
       "evaluation_manifest": "manifests/tennis11_game1_manifest.json",
-      "expected_contact_frames": [159, 635, 1485, 1659, 2091, 2432, 2952]
+      "expected_contact_frames": [159, 635, 1485, 1659, 2091, 2432, 2952],
+      "clip_start_seconds": 40.0,
+      "review_priorities": [
+        {
+          "frame": 786,
+          "kind": "known suppressed non-serve control",
+          "note": "High-confidence ball_toss suppression that manual review confirmed is a rally overhead, not a serve."
+        }
+      ]
     },
     {
       "label": "game 2",
@@ -26,22 +35,20 @@
       "render_output": "game2_timeline_hypotheses.mp4",
       "contact_review_output": "game2_serve_contact_review.html",
       "contact_review_include_suppressed": true,
+      "clip_start_seconds": 186.0,
       "review_priorities": [
         {
           "frame": 623,
-          "seconds": 207.8,
           "kind": "suppressed serve candidate",
           "note": "No far-half tracked ball in the prior window; racket-overhead posture in the contact strip."
         },
         {
           "frame": 3506,
-          "seconds": 302.9,
           "kind": "suppressed serve candidate",
           "note": "No far-half tracked ball in the prior window; ball appears at the racket in the contact strip."
         },
         {
           "frame": 4183,
-          "seconds": 325.4,
           "kind": "strongest suppressed serve candidate",
           "note": "80 prior tracked detections with none in the far half; clear overhead contact in the strip."
         }

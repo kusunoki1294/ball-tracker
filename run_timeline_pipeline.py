@@ -196,7 +196,10 @@ def config_entries(config, out_dir):
             "single_server": item.get("single_server") if "single_server" in item else None,
         }
         if item.get("review_priorities"):
-            review_priorities[label] = item["review_priorities"]
+            review_priorities[label] = {
+                "clip_start_seconds": item.get("clip_start_seconds"),
+                "items": item["review_priorities"],
+            }
     return (
         clips,
         manifests,
@@ -257,6 +260,7 @@ def write_demo_index(
     contact_reviews,
     contact_review_options,
     review_priorities,
+    fps,
 ):
     base_dir = os.path.dirname(path) or "."
     racket_html = os.path.join(base_dir, "serve_racket_cue_eval.html")
@@ -343,9 +347,13 @@ def write_demo_index(
                 f"<p><a href=\"{video_href}\">Open {html.escape(label)} MP4</a></p>"
                 "</section>"
             )
-        for item in review_priorities.get(label, []) or []:
+        priority_config = review_priorities.get(label) or {}
+        clip_start_seconds = priority_config.get("clip_start_seconds")
+        for item in priority_config.get("items") or []:
             frame = item.get("frame")
             seconds = item.get("seconds")
+            if clip_start_seconds is not None and frame is not None:
+                seconds = round(float(clip_start_seconds) + int(frame) / float(fps), 1)
             note = item.get("note") or item.get("reason") or ""
             kind = item.get("kind") or "review"
             time_text = f" · {html.escape(str(seconds))}s" if seconds is not None else ""
@@ -695,6 +703,7 @@ def main():
         config_contact_reviews,
         config_contact_review_options,
         config_review_priorities,
+        args.fps,
     )
     print(f"wrote {audit_html}")
     print(f"wrote {audit_json}")

@@ -124,16 +124,18 @@ def validate_outputs(output_dir):
             demo = handle.read()
         if "point_frames" in demo:
             errors.append("timeline demo HTML must not contain point_frames")
-        if "contact sheet (7 accepted)" not in demo:
+        if "contact sheet (7 accepted + 6 suppressed)" not in demo:
             errors.append("timeline demo must label game 1 contact review contents")
         if "contact sheet (9 accepted + 8 suppressed)" not in demo:
             errors.append("timeline demo must label game 2 contact review contents")
-        for frame in ("f623", "f3506", "f4183"):
+        for frame in ("f786", "f623", "f3506", "f4183"):
             if frame not in demo:
                 errors.append(f"timeline demo must surface review priority {frame}")
+        if "f623 · 206.8s" not in demo:
+            errors.append("timeline demo must derive f623 source timestamp from frame and clip start")
 
     expected_contact_assets = {
-        "game1_serve_contact_review": 28,
+        "game1_serve_contact_review": 52,
         "game2_serve_contact_review": 68,
     }
     for stem, expected_count in expected_contact_assets.items():
