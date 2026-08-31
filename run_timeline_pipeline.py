@@ -666,7 +666,7 @@ def write_racket_cue_eval(config, report_clips, clip_jsonls, expected_contacts, 
     return {"csv": output_csv, "html": output_html}
 
 
-def write_preroll_review(config_renders, review_priorities, out_dir):
+def write_preroll_review(config_renders, review_priorities, clip_jsonls, out_dir):
     clips = []
     for label, priority_config in review_priorities.items():
         render_config = config_renders.get(label)
@@ -678,6 +678,7 @@ def write_preroll_review(config_renders, review_priorities, out_dir):
                 {
                     "label": label,
                     "video": render_config["video"],
+                    "jsonl": clip_jsonls.get(label, ""),
                     "items": items,
                 }
             )
@@ -763,6 +764,7 @@ def main():
     preroll_review = write_preroll_review(
         config_renders,
         config_review_priorities,
+        clip_jsonls,
         args.out_dir,
     )
 

@@ -7,6 +7,7 @@ separates a true serve from a mid-rally overhead.
 
 import argparse
 import html
+import json
 import os
 
 import cv2
@@ -16,6 +17,10 @@ from render_timeline_hypotheses import open_frame_reader
 
 OFFSETS = (-60, -50, -40, -30, -20, -10, 0)
 OUTPUT_WIDTH = 420
+BALL_COLOR = (0, 255, 255)
+BALL_OUTLINE = (0, 0, 0)
+TEXT_COLOR = (255, 255, 255)
+TEXT_BG = (0, 0, 0)
 
 
 def parse_args():
@@ -64,25 +69,78 @@ def parse_clip(raw):
     return {"label": label, "video": video, "items": items}
 
 
+def read_tracking_by_frame(path):
+    if not path:
+        return {}
+    by_frame = {}
+    with open(path, "r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            frame = row.get("frame")
+            if frame is not None:
+                by_frame[int(frame)] = row
+    return by_frame
+
+
+def ball_center(row):
+    ball = (row or {}).get("ball") or {}
+    center = ball.get("center")
+    if center and len(center) == 2:
+        return float(center[0]), float(center[1])
+    bbox = ball.get("bbox")
+    if bbox and len(bbox) == 4:
+        x1, y1, x2, y2 = [float(value) for value in bbox]
+        return (x1 + x2) / 2.0, (y1 + y2) / 2.0
+    return None
+
+
 def resize_frame(frame):
     height, width = frame.shape[:2]
     scale = OUTPUT_WIDTH / float(width)
-    return cv2.resize(
+    resized = cv2.resize(
         frame,
         (OUTPUT_WIDTH, int(round(height * scale))),
         interpolation=cv2.INTER_AREA,
     )
+    return resized, scale
 
 
-def write_frame(image, path):
+def draw_ball_marker(image, center, scale):
+    if center:
+        x = int(round(center[0] * scale))
+        y = int(round(center[1] * scale))
+        cv2.circle(image, (x, y), 9, BALL_OUTLINE, 4, cv2.LINE_AA)
+        cv2.circle(image, (x, y), 9, BALL_COLOR, 2, cv2.LINE_AA)
+        cv2.line(image, (x - 15, y), (x + 15, y), BALL_OUTLINE, 4, cv2.LINE_AA)
+        cv2.line(image, (x, y - 15), (x, y + 15), BALL_OUTLINE, 4, cv2.LINE_AA)
+        cv2.line(image, (x - 15, y), (x + 15, y), BALL_COLOR, 2, cv2.LINE_AA)
+        cv2.line(image, (x, y - 15), (x, y + 15), BALL_COLOR, 2, cv2.LINE_AA)
+        return
+    cv2.rectangle(image, (6, 6), (150, 29), TEXT_BG, -1)
+    cv2.putText(
+        image,
+        "ball not tracked",
+        (10, 23),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.45,
+        TEXT_COLOR,
+        1,
+        cv2.LINE_AA,
+    )
+
+
+def write_frame(image, path, center):
     if image is None:
         raise RuntimeError(f"failed writing {path}: no image")
-    resized = resize_frame(image)
+    resized, scale = resize_frame(image)
+    draw_ball_marker(resized, center, scale)
     if not cv2.imwrite(path, resized, [int(cv2.IMWRITE_JPEG_QUALITY), 88]):
         raise RuntimeError(f"failed writing {path}")
 
 
-def extract_clip_frames(video, jobs):
+def extract_clip_frames(video, jobs, by_frame):
     reader = open_frame_reader(video)
     jobs = sorted(jobs, key=lambda item: item[0])
     current_frame = 0
@@ -97,7 +155,7 @@ def extract_clip_frames(video, jobs):
                     raise RuntimeError(f"failed extracting frame {target_frame}")
             while index < len(jobs) and jobs[index][0] == target_frame:
                 _, output_path = jobs[index]
-                write_frame(image, output_path)
+                write_frame(image, output_path, ball_center(by_frame.get(target_frame)))
                 index += 1
         while True:
             ok, _ = reader.read()
@@ -121,6 +179,7 @@ def export_review(clips, output):
     card_index = 0
     for clip in clips:
         jobs = []
+        by_frame = read_tracking_by_frame(clip.get("jsonl"))
         for item in clip["items"]:
             card_index += 1
             frame = int(item["frame"])
@@ -144,7 +203,7 @@ def export_review(clips, output):
                 f"<div class=\"strip\">{''.join(strip)}</div>"
                 "</article>"
             )
-        extract_clip_frames(clip["video"], jobs)
+        extract_clip_frames(clip["video"], jobs, by_frame)
 
     document = f"""<!doctype html>
 <html lang="en">
@@ -171,7 +230,9 @@ def export_review(clips, output):
   <h1>Timeline Pre-Roll Review</h1>
   <div class="notice"><strong>Review artifact only.</strong> Contact posture alone cannot
   distinguish a serve from a rally overhead. These strips show the two seconds before
-  selected contacts so a reviewer can look for an incoming live ball.</div>
+  selected contacts so a reviewer can look for an incoming live ball. Yellow crosshairs
+  mark tracked ball positions; "ball not tracked" means the tracker had no ball for that
+  frame.</div>
   <section class="grid">{''.join(cards)}</section>
 </body>
 </html>

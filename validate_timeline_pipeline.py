@@ -173,9 +173,14 @@ def validate_outputs(output_dir):
     preroll_assets = os.path.join(output_dir, "timeline_preroll_review_assets")
     if not os.path.exists(preroll_path):
         errors.append(f"missing pre-roll review {preroll_path}")
-    elif not os.path.isdir(preroll_assets):
-        errors.append(f"missing pre-roll review assets {preroll_assets}")
     else:
+        with open(preroll_path, "r", encoding="utf-8") as handle:
+            preroll = handle.read()
+        if "Yellow crosshairs" not in preroll or "ball not tracked" not in preroll:
+            errors.append("pre-roll review must explain ball marker semantics")
+    if os.path.exists(preroll_path) and not os.path.isdir(preroll_assets):
+        errors.append(f"missing pre-roll review assets {preroll_assets}")
+    elif os.path.isdir(preroll_assets):
         count = len(
             [
                 name
