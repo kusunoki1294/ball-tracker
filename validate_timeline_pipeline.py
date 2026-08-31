@@ -76,6 +76,9 @@ def validate_outputs(output_dir):
             errors.append("timeline demo must label game 1 contact review contents")
         if "contact sheet (9 accepted + 8 suppressed)" not in demo:
             errors.append("timeline demo must label game 2 contact review contents")
+        for frame in ("f623", "f3506", "f4183"):
+            if frame not in demo:
+                errors.append(f"timeline demo must surface review priority {frame}")
 
     expected_contact_assets = {
         "game1_serve_contact_review": 28,
