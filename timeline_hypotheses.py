@@ -135,8 +135,8 @@ def load_court_calibration(path):
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "Infer point-like timeline hypotheses from a tracking log. This does "
-            "not replace a manifest; it emits uncertain candidates with reasons."
+            "Infer serve-motion timeline hypotheses from a tracking log. This does "
+            "not replace a manifest; it emits uncertain review artifacts with reasons."
         )
     )
     parser.add_argument("--jsonl", required=True, help="Input track_ball_yolo JSONL.")
