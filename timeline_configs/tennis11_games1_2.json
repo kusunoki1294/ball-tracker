@@ -3,6 +3,7 @@
   "court_calib_file": "yoloVids/calibration/court_calib_tennis11.json",
   "out_dir": "yoloVids/outputs/tennis11/timeline",
   "bundle_output": "tennis11_timeline_demo.zip",
+  "demo_guide": "docs/tennis11_demo_guide.md",
   "fps": 30.0,
   "racket_cue_eval": {
     "output_csv": "serve_racket_cue_eval.csv",

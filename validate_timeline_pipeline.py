@@ -128,6 +128,8 @@ def validate_outputs(output_dir):
             errors.append("timeline demo must label game 1 contact review contents")
         if "contact sheet (9 accepted + 8 suppressed)" not in demo:
             errors.append("timeline demo must label game 2 contact review contents")
+        if "tennis11_demo_guide.md" not in demo:
+            errors.append("timeline demo must link the demo guide")
         for frame in ("f786", "f623", "f3506", "f4183"):
             if frame not in demo:
                 errors.append(f"timeline demo must surface review priority {frame}")
@@ -162,6 +164,9 @@ def validate_outputs(output_dir):
         path = os.path.join(output_dir, name)
         if not os.path.exists(path):
             errors.append(f"missing racket cue audit artifact {path}")
+    guide_path = os.path.join(output_dir, "tennis11_demo_guide.md")
+    if not os.path.exists(guide_path):
+        errors.append(f"missing copied demo guide {guide_path}")
 
     clips = {clip["label"]: clip for clip in audit.get("clips", [])}
     expected = {

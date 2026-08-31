@@ -10,6 +10,7 @@ import argparse
 import html
 import json
 import os
+import shutil
 import sys
 import zipfile
 
@@ -156,6 +157,15 @@ def configured_args(args, config):
     return args
 
 
+def copy_demo_guide(config, out_dir):
+    guide = config.get("demo_guide")
+    if not guide:
+        return ""
+    output = os.path.join(out_dir, os.path.basename(guide))
+    shutil.copyfile(guide, output)
+    return output
+
+
 def config_entries(config, out_dir):
     clips = []
     manifests = {}
@@ -261,6 +271,7 @@ def write_demo_index(
     contact_review_options,
     review_priorities,
     fps,
+    demo_guide,
 ):
     base_dir = os.path.dirname(path) or "."
     racket_html = os.path.join(base_dir, "serve_racket_cue_eval.html")
@@ -269,6 +280,12 @@ def write_demo_index(
         racket_link = (
             f'<a class="secondary" href="{html.escape(rel_link(racket_html, base_dir))}">'
             "Racket cue audit</a>"
+        )
+    guide_link = ""
+    if demo_guide and os.path.exists(demo_guide):
+        guide_link = (
+            f'<a class="secondary" href="{html.escape(rel_link(demo_guide, base_dir))}">'
+            "Demo guide</a>"
         )
     rows = []
     highlights = []
@@ -432,6 +449,7 @@ def write_demo_index(
     <a href="{html.escape(rel_link(audit_html, base_dir))}">Detailed audit</a>
     <a class="secondary" href="{html.escape(rel_link(audit_json, base_dir))}">Audit JSON</a>
     {racket_link}
+    {guide_link}
   </div>
   <section class="highlights">
     {''.join(highlights)}
@@ -477,9 +495,20 @@ def write_demo_index(
         handle.write(document)
 
 
-def write_demo_bundle(path, demo_index, audit_html, audit_json, report_clips, rendered_videos, contact_reviews):
+def write_demo_bundle(
+    path,
+    demo_index,
+    audit_html,
+    audit_json,
+    report_clips,
+    rendered_videos,
+    contact_reviews,
+    demo_guide,
+):
     ensure_parent(path)
     files = [demo_index, audit_html, audit_json]
+    if demo_guide:
+        files.append(demo_guide)
     out_dir = os.path.dirname(demo_index) or "."
     files.extend(
         os.path.join(out_dir, name)
@@ -686,6 +715,7 @@ def main():
             )
 
     write_racket_cue_eval(config, report_clips, clip_jsonls, expected_contacts, args.out_dir)
+    demo_guide = copy_demo_guide(config, args.out_dir)
 
     audit_html = os.path.join(args.out_dir, "timeline_audit.html")
     audit_json = os.path.join(args.out_dir, "timeline_audit.json")
@@ -704,6 +734,7 @@ def main():
         config_contact_review_options,
         config_review_priorities,
         args.fps,
+        demo_guide,
     )
     print(f"wrote {audit_html}")
     print(f"wrote {audit_json}")
@@ -718,6 +749,7 @@ def main():
             report_clips,
             rendered_videos,
             config_contact_reviews,
+            demo_guide,
         )
         print(f"wrote {bundle_path}")
     print("not_scoring_truth: true")
