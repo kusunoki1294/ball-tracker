@@ -42,6 +42,9 @@ Good current claim:
   game-2 contacts are labelled serves, and 4 labelled serves are suppressed.
 - The front-page review priorities show both failure classes: verified
   suppressed serves and far-side non-serve controls.
+- The f786 game-1 control also carries a stuck-track warning in the detailed
+  JSON: the suppressor's rally evidence is correct on outcome but weak on
+  mechanism, so that metric should not be tuned blindly.
 
 Do not claim:
 

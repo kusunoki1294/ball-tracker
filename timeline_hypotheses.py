@@ -8,7 +8,7 @@ from serve_detect import (
     RALLY_BALL_RETURN_FRACTION,
     RALLY_MIN_TRACKED_SECONDS,
     REACH_SEARCH_SECONDS,
-    ball_return_fraction,
+    ball_return_evidence,
     detect_serve_motions_for_point,
     frame_window,
 )
@@ -503,7 +503,7 @@ def second_serve_grouping_evidence(
     attempt,
     fps,
 ):
-    fraction, tracked = ball_return_fraction(
+    evidence = ball_return_evidence(
         by_frame,
         previous_attempt["contact_frame"],
         attempt["contact_frame"],
@@ -511,6 +511,8 @@ def second_serve_grouping_evidence(
         inv_homography,
         fps,
     )
+    fraction = evidence["ball_return_fraction"]
+    tracked = evidence["ball_tracked_frames"]
     min_tracked = frame_window(
         max(RALLY_MIN_TRACKED_SECONDS, SECOND_SERVE_MIN_TRACKED_SECONDS),
         fps,
@@ -520,6 +522,12 @@ def second_serve_grouping_evidence(
         "gap_frames": attempt["contact_frame"] - previous_attempt["contact_frame"],
         "ball_return_fraction": round(fraction, 3) if fraction is not None else None,
         "ball_tracked_frames": tracked,
+        "ball_returned_frames": evidence["ball_returned_frames"],
+        "stuck_track_run_frames": evidence["stuck_track_run_frames"],
+        "stuck_track_run_start_frame": evidence["stuck_track_run_start_frame"],
+        "stuck_track_run_end_frame": evidence["stuck_track_run_end_frame"],
+        "stuck_track_run_fraction": round(evidence["stuck_track_run_fraction"], 3),
+        "stuck_track_dominates": evidence["stuck_track_dominates"],
         "min_ball_tracked_frames": min_tracked,
         "min_ball_tracked_seconds": max(
             RALLY_MIN_TRACKED_SECONDS,
@@ -535,6 +543,8 @@ def mark_suppressed_motion(attempt, previous, evidence, reason, fps):
     attempt.setdefault("review_reasons", []).append(reason)
     if evidence["gap_frames"] >= frame_window(LONG_SUPPRESSION_REVIEW_SECONDS, fps):
         attempt["review_reasons"].append("suppression_may_hide_point_boundary")
+    if evidence.get("stuck_track_dominates"):
+        attempt["review_reasons"].append("ball_return_evidence_dominated_by_stuck_track")
     attempt["previous_motion_evidence"] = evidence
     previous.setdefault("suppressed_rally_motions", []).append(attempt)
 

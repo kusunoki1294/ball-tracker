@@ -31,16 +31,34 @@ lob was being reported as the serve, and its striker stood at world y=63ft,
 
 Known limits, in the order they are likely to bite:
 
-* Far-court servers are not supported. Verified on tennis11 (near serves) only;
-  on tennis9, whose server is far, the detector finds nothing and the caller
-  falls back to the old bounce-first path with `serve_motion_fallback` set. The
-  cause is calibration, not thresholds: court_calib_tennis7.json puts the far
-  baseline about 45px above the white line actually visible in the frame, so a
-  far player standing correctly behind it projects to world y=14-16ft instead of
-  ~0 and can never pass the gate. Comparing foot to baseline in image space
-  instead of world space was tried and fails the same way, for the same reason.
-  Do not widen BEHIND_BASELINE_MARGIN_FT to paper over this -- every value loose
-  enough to admit tennis9's far player also readmits tennis11's rally lob.
+* Far-court servers depend on how good the calibration is at the far end, and
+  that varies per clip rather than being broken outright. On tennis9 the
+  detector finds nothing and the caller falls back to the bounce-first path with
+  `serve_motion_fallback` set: court_calib_tennis7.json puts the far baseline
+  about 45px above the white line actually visible in the frame, so a far player
+  standing correctly behind it projects to world y=14-16ft instead of ~0 and can
+  never pass the gate. Comparing foot to baseline in image space instead of
+  world space was tried and fails the same way, for the same reason. On tennis11
+  the far end is calibrated well enough that the gate stops rejecting: the far
+  player's feet project to a median world y of -2.8ft (game 1) and -10.4ft
+  (game 2), clearing it in 85-90% of frames. That is not the same as the
+  detector working there, and hand-labelling settled it: of four far-side
+  detections accepted on tennis11 game 2, ZERO were serves. All four were
+  returns or rally shots -- waist-height contacts played while moving, with no
+  toss and no overhead extension. Over the same clip all nine real serves were
+  near-side and near-side precision was 5/5. So far-side output is wrong here,
+  not merely unverified, and the right treatment is to gate it off when the
+  serving side is known rather than to tune it.
+  Do not widen BEHIND_BASELINE_MARGIN_FT to rescue a badly calibrated clip --
+  every value loose enough to admit tennis9's far player also readmits
+  tennis11's rally lob. Fix the calibration instead.
+* The behind-baseline gate is a filter, not a discriminator. Both players spend
+  most of a rally behind their own baselines (measured 75-92% of frames on
+  tennis11), so passing it is weak evidence. What it reliably excludes is a
+  strike played from INSIDE the court, which is what the mid-rally overhead on
+  point 6 was. Do not read a passed gate as "this is a serve" -- the far-side
+  result above is exactly that mistake measured end to end: the gate passed
+  85-90% of the time and the detections were still 0-for-4.
 * Singles only. Both cues read `player_near`/`player_far`, so the extra players
   and merged boxes of a doubles clip would break the association.
 * Durations are held in seconds and converted with the clip's fps, so frame
@@ -113,6 +131,9 @@ MIN_SERVE_SEPARATION_SECONDS = 1.0
 MAX_SECOND_SERVE_GAP_SECONDS = 15.0
 # Too little tracked ball to conclude anything about a rally from.
 RALLY_MIN_TRACKED_SECONDS = 0.5
+STUCK_RETURN_TRACK_RADIUS_PX = 12.0
+STUCK_RETURN_TRACK_MIN_SECONDS = 0.5
+STUCK_RETURN_TRACK_DOMINANCE_FRACTION = 0.4
 
 FPS_DEFAULT = 30.0
 
@@ -172,6 +193,97 @@ def _ball_track(by_frame, start_frame, end_frame):
         if center:
             track.append((frame, float(center[0]), float(center[1])))
     return track
+
+
+def _ball_return_samples(by_frame, first_frame, last_frame, server, inv_homography):
+    samples = []
+    for frame in range(first_frame + 1, last_frame):
+        row = by_frame.get(frame)
+        ball = row.get("ball") if row else None
+        if not ball or not ball.get("center"):
+            continue
+        world_point = project_to_court_world(
+            ball_contact_point(ball) or ball.get("center"), inv_homography
+        )
+        returned = None
+        if world_point:
+            on_near_side = world_point[1] > COURT_NET_Y_FT
+            returned = on_near_side == (server == "near")
+        samples.append(
+            {
+                "frame": frame,
+                "center": (float(ball["center"][0]), float(ball["center"][1])),
+                "returned": returned,
+            }
+        )
+    return samples
+
+
+def _longest_stuck_run(samples, fps):
+    if not samples:
+        return {"frames": 0, "start_frame": None, "end_frame": None}
+    max_gap = frame_window(TOSS_MAX_TRACK_GAP_SECONDS, fps)
+    radius = STUCK_RETURN_TRACK_RADIUS_PX
+    best = {"frames": 0, "start_frame": None, "end_frame": None}
+    for start in range(len(samples)):
+        min_x = max_x = samples[start]["center"][0]
+        min_y = max_y = samples[start]["center"][1]
+        previous_frame = samples[start]["frame"]
+        count = 0
+        end_frame = previous_frame
+        for sample in samples[start:]:
+            if sample["frame"] - previous_frame > max_gap:
+                break
+            x, y = sample["center"]
+            min_x = min(min_x, x)
+            max_x = max(max_x, x)
+            min_y = min(min_y, y)
+            max_y = max(max_y, y)
+            if max_x - min_x > radius * 2.0 or max_y - min_y > radius * 2.0:
+                break
+            count += 1
+            end_frame = sample["frame"]
+            previous_frame = sample["frame"]
+        if count > best["frames"]:
+            best = {
+                "frames": count,
+                "start_frame": samples[start]["frame"],
+                "end_frame": end_frame,
+            }
+    return best
+
+
+def ball_return_evidence(by_frame, first_frame, last_frame, server, inv_homography, fps):
+    samples = _ball_return_samples(
+        by_frame,
+        first_frame,
+        last_frame,
+        server,
+        inv_homography,
+    )
+    tracked = len(samples)
+    returned = sum(1 for sample in samples if sample["returned"] is True)
+    fraction = (
+        None
+        if tracked < frame_window(RALLY_MIN_TRACKED_SECONDS, fps)
+        else returned / float(tracked)
+    )
+    stuck = _longest_stuck_run(samples, fps)
+    stuck_fraction = stuck["frames"] / float(tracked) if tracked else 0.0
+    stuck_dominates = (
+        stuck["frames"] >= frame_window(STUCK_RETURN_TRACK_MIN_SECONDS, fps)
+        and stuck_fraction >= STUCK_RETURN_TRACK_DOMINANCE_FRACTION
+    )
+    return {
+        "ball_return_fraction": fraction,
+        "ball_tracked_frames": tracked,
+        "ball_returned_frames": returned,
+        "stuck_track_run_frames": stuck["frames"],
+        "stuck_track_run_start_frame": stuck["start_frame"],
+        "stuck_track_run_end_frame": stuck["end_frame"],
+        "stuck_track_run_fraction": stuck_fraction,
+        "stuck_track_dominates": stuck_dominates,
+    }
 
 
 def _toss_apexes(by_frame, track, side, inv_homography, fps):
@@ -321,25 +433,15 @@ def ball_return_fraction(by_frame, first_frame, last_frame, server, inv_homograp
     served ball that faults stays on the receiver's side until it is collected,
     while a rally sends it back and forth across the net.
     """
-    tracked = 0
-    returned = 0
-    for frame in range(first_frame + 1, last_frame):
-        row = by_frame.get(frame)
-        ball = row.get("ball") if row else None
-        if not ball or not ball.get("center"):
-            continue
-        tracked += 1
-        world_point = project_to_court_world(
-            ball_contact_point(ball) or ball.get("center"), inv_homography
-        )
-        if not world_point:
-            continue
-        on_near_side = world_point[1] > COURT_NET_Y_FT
-        if on_near_side == (server == "near"):
-            returned += 1
-    if tracked < frame_window(RALLY_MIN_TRACKED_SECONDS, fps):
-        return None, tracked
-    return returned / float(tracked), tracked
+    evidence = ball_return_evidence(
+        by_frame,
+        first_frame,
+        last_frame,
+        server,
+        inv_homography,
+        fps,
+    )
+    return evidence["ball_return_fraction"], evidence["ball_tracked_frames"]
 
 
 def _dedupe(motions, fps):

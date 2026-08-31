@@ -207,6 +207,22 @@ def validate_outputs(output_dir):
             errors.append(f"expected 10 pre-roll assets, got {count}")
 
     clips = {clip["label"]: clip for clip in audit.get("clips", [])}
+    game1_hypotheses_path = os.path.join(output_dir, "game_1_hypotheses.json")
+    if os.path.exists(game1_hypotheses_path):
+        with open(game1_hypotheses_path, "r", encoding="utf-8") as handle:
+            game1_hypotheses = json.load(handle)
+        f786 = [
+            motion
+            for hypothesis in game1_hypotheses.get("hypotheses", [])
+            for motion in hypothesis.get("suppressed_rally_motions", [])
+            if motion.get("contact_frame") == 786
+        ]
+        if not f786:
+            errors.append("game 1 f786 suppression must remain visible")
+        else:
+            reasons = f786[0].get("review_reasons") or []
+            if "ball_return_evidence_dominated_by_stuck_track" not in reasons:
+                errors.append("game 1 f786 must flag stuck-track-dominated return evidence")
     expected = {
         "game 1": {
             "point_hypotheses": 6,
