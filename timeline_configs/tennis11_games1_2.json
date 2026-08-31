@@ -40,18 +40,48 @@
       "review_priorities": [
         {
           "frame": 623,
-          "kind": "suppressed serve candidate",
-          "note": "No far-half tracked ball in the prior window; racket-overhead posture in the contact strip."
+          "kind": "suppressed serve",
+          "note": "Verified from source-video sequence: full serve motion, but the automated grouper suppresses it as rally motion."
+        },
+        {
+          "frame": 2517,
+          "kind": "suppressed serve",
+          "note": "Verified serve missed by the far-ball heuristic; shows why suppressed motions need review instead of promotion."
         },
         {
           "frame": 3506,
-          "kind": "suppressed serve candidate",
-          "note": "No far-half tracked ball in the prior window; ball appears at the racket in the contact strip."
+          "kind": "suppressed serve",
+          "note": "Verified serve from the near end, hidden in the suppressed set."
         },
         {
           "frame": 4183,
-          "kind": "strongest suppressed serve candidate",
-          "note": "80 prior tracked detections with none in the far half; clear overhead contact in the strip."
+          "kind": "suppressed serve",
+          "note": "Verified serve, near-identical to accepted f3987 6.5 seconds earlier."
+        },
+        {
+          "frame": 257,
+          "kind": "accepted non-serve control",
+          "note": "Pre-roll shows the near player serving first; the far contact is the return, not a serve."
+        },
+        {
+          "frame": 408,
+          "kind": "suppressed non-serve control",
+          "note": "Far-side rally shot: waist/chest-height contact while moving, no toss or overhead extension."
+        },
+        {
+          "frame": 2116,
+          "kind": "accepted non-serve control",
+          "note": "Far-side rally shot incorrectly accepted as a serve-motion hypothesis."
+        },
+        {
+          "frame": 2629,
+          "kind": "accepted non-serve control",
+          "note": "Far-side lateral rally contact incorrectly accepted as a serve-motion hypothesis."
+        },
+        {
+          "frame": 3154,
+          "kind": "accepted non-serve control",
+          "note": "Far-side leaning rally contact; no service motion in the pre-roll."
         }
       ]
     }

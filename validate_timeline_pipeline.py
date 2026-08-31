@@ -132,7 +132,18 @@ def validate_outputs(output_dir):
             errors.append("timeline demo must link the demo guide")
         if "timeline_preroll_review.html" not in demo:
             errors.append("timeline demo must link the pre-roll review")
-        for frame in ("f786", "f623", "f3506", "f4183"):
+        for frame in (
+            "f786",
+            "f623",
+            "f2517",
+            "f3506",
+            "f4183",
+            "f257",
+            "f408",
+            "f2116",
+            "f2629",
+            "f3154",
+        ):
             if frame not in demo:
                 errors.append(f"timeline demo must surface review priority {frame}")
         if "f623 · 206.8s" not in demo:
@@ -176,8 +187,8 @@ def validate_outputs(output_dir):
     else:
         with open(preroll_path, "r", encoding="utf-8") as handle:
             preroll = handle.read()
-        if "Yellow crosshairs" not in preroll or "ball not tracked" not in preroll:
-            errors.append("pre-roll review must explain ball marker semantics")
+        if "image-space tracked-ball trail" not in preroll or "tracked coverage" not in preroll:
+            errors.append("pre-roll review must explain image-space trail and coverage semantics")
     if os.path.exists(preroll_path) and not os.path.isdir(preroll_assets):
         errors.append(f"missing pre-roll review assets {preroll_assets}")
     elif os.path.isdir(preroll_assets):
@@ -188,8 +199,8 @@ def validate_outputs(output_dir):
                 if name.startswith("preroll_") and name.lower().endswith(".jpg")
             ]
         )
-        if count != 28:
-            errors.append(f"expected 28 pre-roll assets, got {count}")
+        if count != 10:
+            errors.append(f"expected 10 pre-roll assets, got {count}")
 
     clips = {clip["label"]: clip for clip in audit.get("clips", [])}
     expected = {

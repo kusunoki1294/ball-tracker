@@ -1,8 +1,8 @@
-"""Export pre-roll strips for timeline review-priority frames.
+"""Export pre-roll trajectory cards for timeline review-priority frames.
 
 The serve/contact crop sheet shows whether a strike happened. This artifact shows
-the two seconds before selected contacts, because that is the evidence that
-separates a true serve from a mid-rally overhead.
+the tracked ball trail from the two seconds before selected contacts, because
+that is the evidence that separates a true serve from a mid-rally overhead.
 """
 
 import argparse
@@ -15,10 +15,11 @@ import cv2
 from render_timeline_hypotheses import open_frame_reader
 
 
-OFFSETS = (-60, -50, -40, -30, -20, -10, 0)
+WINDOW_FRAMES = 60
 OUTPUT_WIDTH = 420
-BALL_COLOR = (0, 255, 255)
 BALL_OUTLINE = (0, 0, 0)
+TRAIL_START = (36, 99, 235)
+TRAIL_END = (239, 68, 68)
 TEXT_COLOR = (255, 255, 255)
 TEXT_BG = (0, 0, 0)
 
@@ -107,55 +108,74 @@ def resize_frame(frame):
     return resized, scale
 
 
-def draw_ball_marker(image, center, scale):
-    if center:
-        x = int(round(center[0] * scale))
-        y = int(round(center[1] * scale))
-        cv2.circle(image, (x, y), 9, BALL_OUTLINE, 4, cv2.LINE_AA)
-        cv2.circle(image, (x, y), 9, BALL_COLOR, 2, cv2.LINE_AA)
-        cv2.line(image, (x - 15, y), (x + 15, y), BALL_OUTLINE, 4, cv2.LINE_AA)
-        cv2.line(image, (x, y - 15), (x, y + 15), BALL_OUTLINE, 4, cv2.LINE_AA)
-        cv2.line(image, (x - 15, y), (x + 15, y), BALL_COLOR, 2, cv2.LINE_AA)
-        cv2.line(image, (x, y - 15), (x, y + 15), BALL_COLOR, 2, cv2.LINE_AA)
-        return
-    cv2.rectangle(image, (6, 6), (150, 29), TEXT_BG, -1)
-    cv2.putText(
-        image,
-        "ball not tracked",
-        (10, 23),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.45,
-        TEXT_COLOR,
-        1,
-        cv2.LINE_AA,
+def trail_color(index, total):
+    if total <= 1:
+        ratio = 1.0
+    else:
+        ratio = index / float(total - 1)
+    return tuple(
+        int(round(TRAIL_START[channel] * (1.0 - ratio) + TRAIL_END[channel] * ratio))
+        for channel in range(3)
     )
 
 
-def write_frame(image, path, center):
+def draw_trail(image, points, scale):
+    if not points:
+        cv2.rectangle(image, (6, 6), (190, 29), TEXT_BG, -1)
+        cv2.putText(
+            image,
+            "no tracked ball in window",
+            (10, 23),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            TEXT_COLOR,
+            1,
+            cv2.LINE_AA,
+        )
+        return
+    scaled = [
+        (frame, int(round(center[0] * scale)), int(round(center[1] * scale)))
+        for frame, center in points
+    ]
+    for index in range(1, len(scaled)):
+        color = trail_color(index, len(scaled))
+        _, x0, y0 = scaled[index - 1]
+        _, x1, y1 = scaled[index]
+        cv2.line(image, (x0, y0), (x1, y1), color, 2, cv2.LINE_AA)
+    for index, (_, x, y) in enumerate(scaled):
+        color = trail_color(index, len(scaled))
+        cv2.circle(image, (x, y), 4, BALL_OUTLINE, -1, cv2.LINE_AA)
+        cv2.circle(image, (x, y), 3, color, -1, cv2.LINE_AA)
+    _, x, y = scaled[-1]
+    cv2.circle(image, (x, y), 8, BALL_OUTLINE, 3, cv2.LINE_AA)
+    cv2.circle(image, (x, y), 8, TRAIL_END, 2, cv2.LINE_AA)
+
+
+def write_trail_frame(image, path, points):
     if image is None:
         raise RuntimeError(f"failed writing {path}: no image")
     resized, scale = resize_frame(image)
-    draw_ball_marker(resized, center, scale)
+    draw_trail(resized, points, scale)
     if not cv2.imwrite(path, resized, [int(cv2.IMWRITE_JPEG_QUALITY), 88]):
         raise RuntimeError(f"failed writing {path}")
 
 
 def extract_clip_frames(video, jobs, by_frame):
     reader = open_frame_reader(video)
-    jobs = sorted(jobs, key=lambda item: item[0])
+    jobs = sorted(jobs, key=lambda item: item["target"])
     current_frame = 0
     try:
         index = 0
         while index < len(jobs):
-            target_frame = jobs[index][0]
+            target_frame = jobs[index]["target"]
             while current_frame < target_frame:
                 ok, image = reader.read()
                 current_frame += 1
                 if not ok or image is None:
                     raise RuntimeError(f"failed extracting frame {target_frame}")
-            while index < len(jobs) and jobs[index][0] == target_frame:
-                _, output_path = jobs[index]
-                write_frame(image, output_path, ball_center(by_frame.get(target_frame)))
+            while index < len(jobs) and jobs[index]["target"] == target_frame:
+                job = jobs[index]
+                write_trail_frame(image, job["output"], job["points"])
                 index += 1
         while True:
             ok, _ = reader.read()
@@ -165,8 +185,17 @@ def extract_clip_frames(video, jobs, by_frame):
         reader.release()
 
 
-def asset_name(card_index, frame, offset):
-    return f"preroll_{card_index:03d}_f{frame}_offset_{offset:+d}.jpg"
+def asset_name(card_index, frame):
+    return f"preroll_{card_index:03d}_f{frame}_trail.jpg"
+
+
+def tracked_points(by_frame, start_frame, end_frame):
+    points = []
+    for frame in range(start_frame, end_frame + 1):
+        center = ball_center(by_frame.get(frame))
+        if center:
+            points.append((frame, center))
+    return points
 
 
 def export_review(clips, output):
@@ -183,24 +212,29 @@ def export_review(clips, output):
         for item in clip["items"]:
             card_index += 1
             frame = int(item["frame"])
-            strip = []
-            for offset in OFFSETS:
-                target = max(1, frame + offset)
-                name = asset_name(card_index, frame, offset)
-                jobs.append((target, os.path.join(assets_dir, name)))
-                rel = os.path.join(os.path.basename(assets_dir), name)
-                label = "contact" if offset == 0 else f"{offset:+d}f"
-                strip.append(
-                    "<figure>"
-                    f"<img src=\"{esc(rel)}\" alt=\"{esc(clip['label'])} frame {target}\">"
-                    f"<figcaption>{esc(label)} · f{target}</figcaption>"
-                    "</figure>"
-                )
+            start_frame = max(1, frame - WINDOW_FRAMES)
+            points = tracked_points(by_frame, start_frame, frame)
+            tracked = len(points)
+            total = frame - start_frame + 1
+            coverage = round(100.0 * tracked / float(max(1, total)), 1)
+            name = asset_name(card_index, frame)
+            rel = os.path.join(os.path.basename(assets_dir), name)
+            jobs.append(
+                {
+                    "target": frame,
+                    "output": os.path.join(assets_dir, name),
+                    "points": points,
+                }
+            )
             cards.append(
                 "<article>"
                 f"<h2>{esc(clip['label'])} f{frame}</h2>"
                 f"<p><strong>{esc(item.get('kind'))}</strong> — {esc(item.get('note'))}</p>"
-                f"<div class=\"strip\">{''.join(strip)}</div>"
+                f"<p class=\"coverage\">tracked coverage: {tracked}/{total} frames ({coverage}%)</p>"
+                "<figure class=\"trail\">"
+                f"<img src=\"{esc(rel)}\" alt=\"{esc(clip['label'])} tracked-ball trail ending at frame {frame}\">"
+                "<figcaption>blue = oldest tracked ball, red ring = latest tracked ball before/contact frame</figcaption>"
+                "</figure>"
                 "</article>"
             )
         extract_clip_frames(clip["video"], jobs, by_frame)
@@ -220,8 +254,9 @@ def export_review(clips, output):
     article {{ background: #fff; border: 1px solid #d8dee6; border-radius: 8px; overflow: hidden; }}
     h2 {{ font-size: 17px; margin: 12px 14px 6px; }}
     p {{ margin: 6px 14px 12px; color: #4b5663; }}
-    .strip {{ display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 1px; background: #111; }}
+    .coverage {{ color: #111827; font-weight: 650; }}
     figure {{ margin: 0; position: relative; background: #111; }}
+    figure.trail {{ border-top: 1px solid #111; }}
     img {{ width: 100%; display: block; background: #111; }}
     figcaption {{ position: absolute; left: 5px; bottom: 5px; background: rgba(0,0,0,.72); color: #fff; font-size: 11px; padding: 3px 5px; border-radius: 4px; }}
   </style>
@@ -229,17 +264,17 @@ def export_review(clips, output):
 <body>
   <h1>Timeline Pre-Roll Review</h1>
   <div class="notice"><strong>Review artifact only.</strong> Contact posture alone cannot
-  distinguish a serve from a rally overhead. These strips show the two seconds before
-  selected contacts so a reviewer can look for an incoming live ball. Yellow crosshairs
-  mark tracked ball positions; "ball not tracked" means the tracker had no ball for that
-  frame.</div>
+  distinguish a serve from a rally overhead. Each card overlays an image-space tracked-ball trail
+  from the previous two seconds on the contact frame. The trail deliberately does not use
+  ground-projected court side, because airborne balls make that projection unreliable.
+  Read the tracked coverage line before trusting missing trail segments.</div>
   <section class="grid">{''.join(cards)}</section>
 </body>
 </html>
 """
     with open(output, "w", encoding="utf-8") as handle:
         handle.write(document)
-    print(f"wrote {output} ({card_index} pre-roll strips)")
+    print(f"wrote {output} ({card_index} pre-roll trail cards)")
 
 
 def main():

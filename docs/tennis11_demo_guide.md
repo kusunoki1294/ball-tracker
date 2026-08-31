@@ -34,10 +34,12 @@ Good current claim:
   second serve.
 - Game 1 has zero spurious accepted serve-motion hypotheses after suppression.
 - Game 2 is unverified but useful as a harder generalization clip: worse ball
-  observation, mixed near/far serves, and 9 accepted serve-motion hypotheses.
-- Game 2 has four front-page review priorities: one known game-1 suppression
-  control (`f786`) and three game-2 suppressed serve candidates (`f623`,
-  `f3506`, `f4183`) that need human eyes.
+  observation, 9 accepted serve-motion hypotheses, and 8 suppressed motions.
+- A source-video label pass says every real game-2 serve is from the near end:
+  accepted far-side contacts are rally shots, while four real near-side serves
+  (`f623`, `f2517`, `f3506`, `f4183`) sit in the suppressed set.
+- The front-page review priorities show both failure classes: verified
+  suppressed serves and far-side non-serve controls.
 
 Do not claim:
 
@@ -62,10 +64,10 @@ Do not claim:
   contacts.
 - `game2_serve_contact_review.html`: crop strips for 9 accepted and 8 suppressed
   game-2 contacts.
-- `timeline_preroll_review.html`: full-court pre-roll strips for f786 plus the
-  three game-2 suppressed serve candidates. Yellow crosshairs mark tracked ball
-  positions; "ball not tracked" is shown when the tracker has no ball for that
-  frame.
+- `timeline_preroll_review.html`: full-court pre-roll trail cards for f786 plus
+  the game-2 suppressed serves and far-side non-serve controls. The trail is
+  drawn in image space, not ground-projected court space, and each card reports
+  how much of the previous two seconds actually had a tracked ball.
 - `serve_racket_cue_eval.html`: why current YOLO racket boxes should stay audit
   evidence only.
 
