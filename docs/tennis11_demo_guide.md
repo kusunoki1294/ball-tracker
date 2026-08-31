@@ -38,6 +38,9 @@ Good current claim:
 - A source-video label pass says every real game-2 serve is from the near end:
   accepted far-side contacts are rally shots, while four real near-side serves
   (`f623`, `f2517`, `f3506`, `f4183`) sit in the suppressed set.
+- Game 2 also has a tracker anomaly absent from game 1: 159 large ball
+  detections in the top image band, consistent with the f183 phantom-ball
+  diagnosis. Treat game-2 ball-derived landings as review evidence, not truth.
 - The front-page review priorities show both failure classes: verified
   suppressed serves and far-side non-serve controls.
 
@@ -48,6 +51,9 @@ Do not claim:
 - Verified game-2 source timestamps. Game 2's clip start is recorded from the
   cut command, but unlike game 1 it has not yet been pinned to a hand-verified
   contact in the full source video.
+- That game-2 ball-track evidence is clean. The demo now surfaces top-band
+  large-ball anomalies precisely because the tracker can lock onto non-ball
+  objects in that clip.
 - That the colored timeline bars are point extents. They are padded review
   windows around serve-motion hypotheses.
 - That racket cues solve serve detection. The racket audit says they are useful

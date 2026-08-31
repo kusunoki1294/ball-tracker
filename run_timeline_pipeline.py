@@ -393,6 +393,7 @@ def write_demo_index(
             f"<td>{html.escape(label)}</td>"
             f"<td>{summary.get('point_hypotheses', '')}</td>"
             f"<td>{summary.get('distinct_real_observations_pct', '')}%</td>"
+            f"<td>{summary.get('top_band_large_ball_detections', '')}</td>"
             f"<td>{summary.get('isolated_point_start_candidates', '')}</td>"
             f"<td>{summary.get('high_confidence_hypotheses', '')}</td>"
             f"<td>{summary.get('suppressed_rally_motions', 0)}</td>"
@@ -469,6 +470,7 @@ def write_demo_index(
         <th>Clip</th>
         <th>Serve-Motion Hypotheses</th>
         <th>Observed</th>
+        <th>Top-Band Large Balls</th>
         <th>Dead-Time Isolated</th>
         <th>High, Clip-Relative</th>
         <th>Suppressed Rally Motions</th>
@@ -489,7 +491,8 @@ def write_demo_index(
   <p>
     <strong>Read observed track quality beside confidence.</strong>
     A clip can show more high-confidence hypotheses while being worse tracked;
-    confidence is useful within a clip, not as a cross-clip quality score.
+    confidence is useful within a clip, not as a cross-clip quality score. Top-band
+    large-ball counts are a tracker anomaly signal, not a rejection rule.
   </p>
   <div class="videos">
     {''.join(video_sections)}

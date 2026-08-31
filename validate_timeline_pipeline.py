@@ -210,6 +210,7 @@ def validate_outputs(output_dir):
             "high_confidence_hypotheses": 1,
             "serve_motions": 13,
             "suppressed_rally_motions": 6,
+            "top_band_large_ball_detections": 0,
             "contact_recall": 1.0,
             "contact_precision": 0.538,
             "single_server": True,
@@ -220,6 +221,7 @@ def validate_outputs(output_dir):
             "high_confidence_hypotheses": 5,
             "serve_motions": 17,
             "suppressed_rally_motions": 8,
+            "top_band_large_ball_detections": 159,
             "contact_evaluation": None,
             "single_server": False,
         },
@@ -237,6 +239,7 @@ def validate_outputs(output_dir):
             "high_confidence_hypotheses",
             "serve_motions",
             "suppressed_rally_motions",
+            "top_band_large_ball_detections",
         ):
             if summary.get(key) != expected_values[key]:
                 errors.append(

@@ -196,10 +196,20 @@ def ball_center(row):
     return center if center and len(center) == 2 else None
 
 
+def ball_size_px(row):
+    ball = row.get("ball") if row else None
+    bbox = ball.get("bbox") if ball else None
+    if not bbox or len(bbox) != 4:
+        return None
+    return max(float(bbox[2]) - float(bbox[0]), float(bbox[3]) - float(bbox[1]))
+
+
 def ball_frame_stats(rows):
     frames = []
     coasted = 0
     repeats = 0
+    top_band_large = 0
+    top_band_total = 0
     previous_center = None
     for row in rows:
         center = ball_center(row)
@@ -212,12 +222,19 @@ def ball_frame_stats(rows):
             coasted += 1
         if previous_center == center:
             repeats += 1
+        size = ball_size_px(row)
+        if center[1] < 150:
+            top_band_total += 1
+            if size is not None and size >= 18:
+                top_band_large += 1
         previous_center = center
     return {
         "frames_with_ball": len(frames),
         "coasted_or_interpolated": coasted,
         "exact_repeats": repeats,
         "distinct_real_observations": max(0, len(frames) - repeats),
+        "top_band_ball_detections": top_band_total,
+        "top_band_large_ball_detections": top_band_large,
     }
 
 
