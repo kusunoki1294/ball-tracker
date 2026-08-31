@@ -43,6 +43,58 @@ for name in ('analyze_tennis_events', 'track_ball_yolo', 'torch', 'ultralytics')
     return errors
 
 
+def jsonl_max_frame(path):
+    max_frame = 0
+    with open(path, "r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            frame = json.loads(line).get("frame")
+            if frame is not None:
+                max_frame = max(max_frame, int(frame))
+    return max_frame
+
+
+def video_frame_count(path):
+    result = run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=nb_frames",
+            "-of",
+            "default=nw=1:nk=1",
+            path,
+        ]
+    )
+    text = result.stdout.strip()
+    if not text or text == "N/A":
+        return 0
+    return int(text)
+
+
+def validate_config_video_alignment():
+    with open(TIMELINE_CONFIG, "r", encoding="utf-8") as handle:
+        config = json.load(handle)
+    errors = []
+    for clip in config.get("clips") or []:
+        label = clip.get("label") or "unknown"
+        jsonl = clip.get("jsonl")
+        video = clip.get("video")
+        if not jsonl or not video:
+            continue
+        log_frames = jsonl_max_frame(jsonl)
+        source_frames = video_frame_count(video)
+        if source_frames != log_frames:
+            errors.append(
+                f"{label}: configured video has {source_frames} frames but JSONL max frame is {log_frames}"
+            )
+    return errors
+
+
 def validate_outputs(output_dir):
     run(
         [
@@ -259,6 +311,7 @@ def validate_contested_single_server_vote():
 def main():
     errors = []
     errors.extend(validate_import_boundary())
+    errors.extend(validate_config_video_alignment())
     errors.extend(validate_contested_single_server_vote())
     with tempfile.TemporaryDirectory() as tmpdir:
         errors.extend(validate_outputs(tmpdir))
