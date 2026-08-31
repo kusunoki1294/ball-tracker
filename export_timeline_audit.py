@@ -129,11 +129,22 @@ def contact_block(data):
     label_block = ""
     if label_eval:
         accepted = label_eval.get("accepted") or {}
+        accepted_by_side = label_eval.get("accepted_by_side") or {}
         suppressed = label_eval.get("suppressed") or {}
+        side_parts = []
+        for side in ("near", "far"):
+            side_bucket = accepted_by_side.get(side) or {}
+            total = side_bucket.get("total", 0)
+            if total:
+                side_parts.append(
+                    f"{esc(side)} {esc(side_bucket.get('serve', 0))}/{esc(total)}"
+                )
+        side_text = f"accepted by side: {', '.join(side_parts)}; " if side_parts else ""
         label_block = (
             "<p class='gt'><strong>Against labelled serve-motion contacts:</strong> "
             f"accepted serve fraction {esc(label_eval.get('accepted_serve_fraction'))} "
             f"({esc(accepted.get('serve', 0))}/{esc(accepted.get('total', 0))} accepted contacts labelled serve), "
+            f"{side_text}"
             f"suppressed verified serves {esc(label_eval.get('suppressed_verified_serves'))}; "
             f"{esc(label_eval.get('caveat'))}</p>"
         )

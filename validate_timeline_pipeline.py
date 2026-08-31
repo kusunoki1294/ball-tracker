@@ -126,8 +126,10 @@ def validate_outputs(output_dir):
             errors.append("timeline demo HTML must not contain point_frames")
         if "contact sheet (7 accepted + 6 suppressed)" not in demo:
             errors.append("timeline demo must label game 1 contact review contents")
-        if "contact sheet (9 accepted + 8 suppressed)" not in demo:
+        if "contact sheet (5 accepted + 12 suppressed)" not in demo:
             errors.append("timeline demo must label game 2 contact review contents")
+        if "labelled contacts: 5/5 accepted serves" not in demo:
+            errors.append("timeline demo must summarize game 2 contact labels")
         if "tennis11_demo_guide.md" not in demo:
             errors.append("timeline demo must link the demo guide")
         if "timeline_preroll_review.html" not in demo:
@@ -217,15 +219,16 @@ def validate_outputs(output_dir):
             "single_server": True,
         },
         "game 2": {
-            "point_hypotheses": 9,
+            "point_hypotheses": 5,
             "isolated_point_start_candidates": 0,
-            "high_confidence_hypotheses": 5,
+            "high_confidence_hypotheses": 2,
             "serve_motions": 17,
-            "suppressed_rally_motions": 8,
-            "accepted_serve_fraction": 0.556,
+            "suppressed_rally_motions": 12,
+            "accepted_serve_fraction": 1.0,
+            "accepted_by_side": {"near": {"serve": 5, "total": 5}},
             "suppressed_verified_serves": 4,
             "contact_evaluation": None,
-            "single_server": False,
+            "single_server": True,
         },
     }
     for label, expected_values in expected.items():
@@ -291,6 +294,15 @@ def validate_outputs(output_dir):
                     f"{expected_values['suppressed_verified_serves']}, got "
                     f"{label_evaluation.get('suppressed_verified_serves')}"
                 )
+            else:
+                for side, side_expected in expected_values.get("accepted_by_side", {}).items():
+                    side_values = (label_evaluation.get("accepted_by_side") or {}).get(side) or {}
+                    for key, value in side_expected.items():
+                        if side_values.get(key) != value:
+                            errors.append(
+                                f"{label}: expected accepted_by_side[{side}][{key}]="
+                                f"{value}, got {side_values.get(key)}"
+                            )
         if "contact_evaluation" in expected_values and expected_values["contact_evaluation"] is None:
             if evaluation is not None:
                 errors.append(f"{label}: expected no contact_evaluation")

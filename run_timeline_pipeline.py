@@ -309,6 +309,7 @@ def write_demo_index(
         summary = data.get("summary") or {}
         manifest_eval = data.get("evaluation") or {}
         evaluation = data.get("contact_evaluation")
+        label_evaluation = data.get("contact_label_evaluation")
         contact = "no contact ground truth"
         status = "unverified"
         if evaluation:
@@ -322,6 +323,12 @@ def write_demo_index(
                 and evaluation.get("contact_recall") == 1.0
             ):
                 status = "verified contacts"
+        elif label_evaluation:
+            accepted = label_evaluation.get("accepted") or {}
+            contact = (
+                f"labelled contacts: {accepted.get('serve', 0)}/"
+                f"{accepted.get('total', 0)} accepted serves"
+            )
         server_mode = "boundary unknown"
         vote = summary.get("single_server_vote") or {}
         if summary.get("single_server"):
@@ -456,7 +463,8 @@ def write_demo_index(
   <p class="subhead">Automated tennis timeline review for the tracked tennis11 clips.</p>
   <div class="warning"><strong>Timeline hypotheses are not scoring truth.</strong>
     Confidence is clip-relative, serve counts are hypotheses, and point ends are inferred.
-    Game 1 has verified serve-contact checks; game 2 is boundary-unknown and unverified.</div>
+    Game 1 has verified serve-contact checks; game 2 has contact labels but remains
+    boundary-unknown and unverified for scoring.</div>
   <div class="actions">
     <a href="{html.escape(rel_link(audit_html, base_dir))}">Detailed audit</a>
     <a class="secondary" href="{html.escape(rel_link(audit_json, base_dir))}">Audit JSON</a>
@@ -597,13 +605,18 @@ def evaluate_contact_labels(result, labels_path):
     labels = load_contact_labels(labels_path)
     accepted = {"total": 0}
     suppressed = {"total": 0}
+    accepted_by_side = {}
     unmatched = []
     for hypothesis in result.get("hypotheses") or []:
         for attempt in hypothesis.get("attempts") or []:
             accepted["total"] += 1
+            side = attempt.get("server") or "unknown"
+            accepted_by_side.setdefault(side, {"total": 0})
+            accepted_by_side[side]["total"] += 1
             label = labels.get(int(attempt.get("contact_frame")))
             if label:
                 increment_label_count(accepted, label.get("label"))
+                increment_label_count(accepted_by_side[side], label.get("label"))
             else:
                 unmatched.append(int(attempt.get("contact_frame")))
         for attempt in hypothesis.get("suppressed_rally_motions") or []:
@@ -621,6 +634,7 @@ def evaluate_contact_labels(result, labels_path):
         "labels": labels_path,
         "labelled_contacts": len(labels),
         "accepted": accepted,
+        "accepted_by_side": accepted_by_side,
         "suppressed": suppressed,
         "accepted_serve_fraction": round(
             accepted_serves / float(max(1, accepted_labelled)), 3

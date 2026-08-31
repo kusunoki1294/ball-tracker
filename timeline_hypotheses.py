@@ -326,12 +326,14 @@ def resolve_single_server_vote(points):
     votes = {"near": 0.0, "far": 0.0}
     counts = {"near": 0, "far": 0}
     for point in points:
-        first = point["attempts"][0]
-        server = first.get("server")
-        if server not in votes:
-            continue
-        votes[server] += server_vote_weight(first)
-        counts[server] += 1
+        vote_attempts = [point["attempts"][0]]
+        vote_attempts.extend(point.get("suppressed_rally_motions", []))
+        for attempt in vote_attempts:
+            server = attempt.get("server")
+            if server not in votes:
+                continue
+            votes[server] += server_vote_weight(attempt)
+            counts[server] += 1
     if not any(counts.values()):
         return None, {"votes": votes, "counts": counts, "margin": 0.0}
     winner = max(votes, key=lambda side: votes[side])
@@ -707,6 +709,11 @@ def build_hypotheses(
                         "suppressed_opposite_server_in_single_game",
                         fps,
                     )
+                    for child in point.get("suppressed_rally_motions", []):
+                        child.setdefault("review_reasons", []).append(
+                            "suppressed_with_opposite_server_parent"
+                        )
+                        previous_kept.setdefault("suppressed_rally_motions", []).append(child)
                 continue
             filtered.append(point)
             previous_kept = point
