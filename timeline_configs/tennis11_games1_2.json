@@ -25,7 +25,27 @@
       "video": "yoloVids/inputs/tennis11_game2.mp4",
       "render_output": "game2_timeline_hypotheses.mp4",
       "contact_review_output": "game2_serve_contact_review.html",
-      "contact_review_include_suppressed": true
+      "contact_review_include_suppressed": true,
+      "review_priorities": [
+        {
+          "frame": 623,
+          "seconds": 207.8,
+          "kind": "suppressed serve candidate",
+          "note": "No far-half tracked ball in the prior window; racket-overhead posture in the contact strip."
+        },
+        {
+          "frame": 3506,
+          "seconds": 302.9,
+          "kind": "suppressed serve candidate",
+          "note": "No far-half tracked ball in the prior window; ball appears at the racket in the contact strip."
+        },
+        {
+          "frame": 4183,
+          "seconds": 325.4,
+          "kind": "strongest suppressed serve candidate",
+          "note": "80 prior tracked detections with none in the far half; clear overhead contact in the strip."
+        }
+      ]
     }
   ]
 }

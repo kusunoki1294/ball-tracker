@@ -164,6 +164,7 @@ def config_entries(config, out_dir):
     contact_reviews = {}
     contact_review_options = {}
     clip_options = {}
+    review_priorities = {}
     for item in config.get("clips") or []:
         label = item.get("label")
         jsonl = item.get("jsonl")
@@ -194,7 +195,18 @@ def config_entries(config, out_dir):
         clip_options[label] = {
             "single_server": item.get("single_server") if "single_server" in item else None,
         }
-    return clips, manifests, contacts, renders, contact_reviews, contact_review_options, clip_options
+        if item.get("review_priorities"):
+            review_priorities[label] = item["review_priorities"]
+    return (
+        clips,
+        manifests,
+        contacts,
+        renders,
+        contact_reviews,
+        contact_review_options,
+        clip_options,
+        review_priorities,
+    )
 
 
 def output_stem(label):
@@ -223,6 +235,18 @@ def rel_link(path, base_dir):
         return path
 
 
+def priority_section(priority_items):
+    if not priority_items:
+        return ""
+    return (
+        '<section class="priorities">'
+        "<h2>Review priorities</h2>"
+        "<p>These are not ground truth. They are the frames most worth checking by eye.</p>"
+        f"<ul>{''.join(priority_items)}</ul>"
+        "</section>"
+    )
+
+
 def write_demo_index(
     path,
     title,
@@ -232,6 +256,7 @@ def write_demo_index(
     rendered_videos,
     contact_reviews,
     contact_review_options,
+    review_priorities,
 ):
     base_dir = os.path.dirname(path) or "."
     racket_html = os.path.join(base_dir, "serve_racket_cue_eval.html")
@@ -244,6 +269,7 @@ def write_demo_index(
     rows = []
     highlights = []
     video_sections = []
+    priority_items = []
     for clip in report_clips:
         label = clip["label"]
         data = clip["data"]
@@ -317,6 +343,19 @@ def write_demo_index(
                 f"<p><a href=\"{video_href}\">Open {html.escape(label)} MP4</a></p>"
                 "</section>"
             )
+        for item in review_priorities.get(label, []) or []:
+            frame = item.get("frame")
+            seconds = item.get("seconds")
+            note = item.get("note") or item.get("reason") or ""
+            kind = item.get("kind") or "review"
+            time_text = f" · {html.escape(str(seconds))}s" if seconds is not None else ""
+            priority_items.append(
+                "<li>"
+                f"<strong>{html.escape(label)} f{html.escape(str(frame))}{time_text}</strong>"
+                f" <span>{html.escape(kind)}</span>"
+                f" — {html.escape(str(note))}"
+                "</li>"
+            )
         rows.append(
             "<tr>"
             f"<td>{html.escape(label)}</td>"
@@ -364,6 +403,12 @@ def write_demo_index(
     .videos {{ margin-top: 28px; display: grid; gap: 24px; }}
     .clip-video {{ background: #fff; border: 1px solid #d7dde5; border-radius: 8px; padding: 14px; }}
     .clip-video h2 {{ margin: 0 0 10px; font-size: 20px; }}
+    .priorities {{ background: #fff; border: 1px solid #d7dde5; border-radius: 8px; padding: 16px; margin: 0 0 22px; }}
+    .priorities h2 {{ margin: 0 0 8px; font-size: 18px; }}
+    .priorities p {{ margin: 0 0 10px; color: #52606d; }}
+    .priorities ul {{ margin: 0; padding-left: 20px; }}
+    .priorities li {{ margin: 6px 0; }}
+    .priorities span {{ color: #7a4b00; font-weight: 650; }}
     video {{ width: 100%; background: #111; display: block; border-radius: 4px; }}
     a {{ color: #0f65b7; }}
   </style>
@@ -383,6 +428,7 @@ def write_demo_index(
   <section class="highlights">
     {''.join(highlights)}
   </section>
+  {priority_section(priority_items)}
   <div class="table-wrap"><table>
     <thead>
       <tr>
@@ -575,6 +621,7 @@ def main():
         config_contact_reviews,
         config_contact_review_options,
         config_clip_options,
+        config_review_priorities,
     ) = config_entries(config, args.out_dir)
 
     clips = config_clips + [parse_label_path(raw, "--clip") for raw in args.clip]
@@ -647,6 +694,7 @@ def main():
         rendered_videos,
         config_contact_reviews,
         config_contact_review_options,
+        config_review_priorities,
     )
     print(f"wrote {audit_html}")
     print(f"wrote {audit_json}")
