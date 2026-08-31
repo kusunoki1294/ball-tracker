@@ -125,11 +125,31 @@ def hypothesis_rows(data):
 
 def contact_block(data):
     evaluation = data.get("contact_evaluation")
+    label_eval = data.get("contact_label_evaluation")
+    label_block = ""
+    if label_eval:
+        accepted = label_eval.get("accepted") or {}
+        suppressed = label_eval.get("suppressed") or {}
+        label_block = (
+            "<p class='gt'><strong>Against labelled serve-motion contacts:</strong> "
+            f"accepted serve fraction {esc(label_eval.get('accepted_serve_fraction'))} "
+            f"({esc(accepted.get('serve', 0))}/{esc(accepted.get('total', 0))} accepted contacts labelled serve), "
+            f"suppressed verified serves {esc(label_eval.get('suppressed_verified_serves'))}; "
+            f"{esc(label_eval.get('caveat'))}</p>"
+        )
+    if not evaluation and label_eval:
+        return (
+            "<p class='nogt'><strong>No verified contact-frame set for recall.</strong> "
+            "No expected serve-contact frame list was supplied, so frame-level recall "
+            "cannot be reported.</p>"
+            + label_block
+        )
     if not evaluation:
         return (
             "<p class='nogt'><strong>No ground truth for this clip.</strong> No verified serve "
             "contact frames were supplied, so no recall or precision can be reported. The "
             "hypothesis counts below are unvalidated.</p>"
+            + label_block
         )
     return (
         "<p class='gt'><strong>Against verified serve contacts:</strong> "
@@ -142,6 +162,7 @@ def contact_block(data):
         f"tolerance ±{esc(evaluation.get('tolerance_frames'))}f. "
         "This measures SERVE CONTACTS, which are verified; it does not measure point boundaries, "
         "which are not.</p>"
+        + label_block
     )
 
 
@@ -290,6 +311,7 @@ def compact_data(clips):
                 "source": clip["data"].get("source_jsonl") or clip["path"],
                 "summary": clip["data"].get("summary"),
                 "contact_evaluation": clip["data"].get("contact_evaluation"),
+                "contact_label_evaluation": clip["data"].get("contact_label_evaluation"),
                 "hypotheses": [
                     {
                         "id": item.get("id"),

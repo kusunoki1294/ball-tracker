@@ -36,6 +36,7 @@
       "render_output": "game2_timeline_hypotheses.mp4",
       "contact_review_output": "game2_serve_contact_review.html",
       "contact_review_include_suppressed": true,
+      "contact_labels": "labels/tennis11_game2_contact_labels.csv",
       "clip_start_seconds": 186.0,
       "review_priorities": [
         {

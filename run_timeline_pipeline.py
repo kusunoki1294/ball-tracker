@@ -7,6 +7,7 @@ hypothesis-only audit report.
 """
 
 import argparse
+import csv
 import html
 import json
 import os
@@ -175,6 +176,7 @@ def config_entries(config, out_dir):
     contact_review_options = {}
     clip_options = {}
     review_priorities = {}
+    contact_labels = {}
     for item in config.get("clips") or []:
         label = item.get("label")
         jsonl = item.get("jsonl")
@@ -210,6 +212,8 @@ def config_entries(config, out_dir):
                 "clip_start_seconds": item.get("clip_start_seconds"),
                 "items": item["review_priorities"],
             }
+        if item.get("contact_labels"):
+            contact_labels[label] = item["contact_labels"]
     return (
         clips,
         manifests,
@@ -219,6 +223,7 @@ def config_entries(config, out_dir):
         contact_review_options,
         clip_options,
         review_priorities,
+        contact_labels,
     )
 
 
@@ -576,7 +581,63 @@ def build_lookup(entries, parser, flag_name):
     return result
 
 
-def run_clip(label, jsonl_path, args, manifests, expected_contacts, clip_options):
+def load_contact_labels(path):
+    labels = {}
+    with open(path, "r", encoding="utf-8", newline="") as handle:
+        for row in csv.DictReader(handle):
+            frame = row.get("frame")
+            if frame:
+                labels[int(frame)] = row
+    return labels
+
+
+def increment_label_count(bucket, label):
+    key = label or "unlabelled"
+    bucket[key] = bucket.get(key, 0) + 1
+
+
+def evaluate_contact_labels(result, labels_path):
+    labels = load_contact_labels(labels_path)
+    accepted = {"total": 0}
+    suppressed = {"total": 0}
+    unmatched = []
+    for hypothesis in result.get("hypotheses") or []:
+        for attempt in hypothesis.get("attempts") or []:
+            accepted["total"] += 1
+            label = labels.get(int(attempt.get("contact_frame")))
+            if label:
+                increment_label_count(accepted, label.get("label"))
+            else:
+                unmatched.append(int(attempt.get("contact_frame")))
+        for attempt in hypothesis.get("suppressed_rally_motions") or []:
+            suppressed["total"] += 1
+            label = labels.get(int(attempt.get("contact_frame")))
+            if label:
+                increment_label_count(suppressed, label.get("label"))
+            else:
+                unmatched.append(int(attempt.get("contact_frame")))
+    accepted_labelled = sum(
+        count for label, count in accepted.items() if label != "total"
+    )
+    accepted_serves = accepted.get("serve", 0)
+    return {
+        "labels": labels_path,
+        "labelled_contacts": len(labels),
+        "accepted": accepted,
+        "suppressed": suppressed,
+        "accepted_serve_fraction": round(
+            accepted_serves / float(max(1, accepted_labelled)), 3
+        ),
+        "suppressed_verified_serves": suppressed.get("serve", 0),
+        "unmatched_contact_frames": unmatched,
+        "caveat": (
+            "These labels evaluate serve-motion contacts only. They do not "
+            "establish point boundaries, point winners, or scoring truth."
+        ),
+    }
+
+
+def run_clip(label, jsonl_path, args, manifests, expected_contacts, clip_options, contact_labels):
     rows, by_frame = read_tracking_log(jsonl_path)
     options = clip_options.get(label, {})
     single_server = options.get("single_server")
@@ -601,6 +662,11 @@ def run_clip(label, jsonl_path, args, manifests, expected_contacts, clip_options
             result["serve_motions"],
             expected_contacts[label],
             args.contact_tolerance_frames,
+        )
+    if label in contact_labels:
+        result["contact_label_evaluation"] = evaluate_contact_labels(
+            result,
+            contact_labels[label],
         )
     return result
 
@@ -707,6 +773,7 @@ def main():
         config_contact_review_options,
         config_clip_options,
         config_review_priorities,
+        config_contact_labels,
     ) = config_entries(config, args.out_dir)
 
     clips = config_clips + [parse_label_path(raw, "--clip") for raw in args.clip]
@@ -738,7 +805,15 @@ def main():
     clip_jsonls = {}
     for label, jsonl_path in clips:
         clip_jsonls[label] = jsonl_path
-        result = run_clip(label, jsonl_path, args, manifests, expected_contacts, config_clip_options)
+        result = run_clip(
+            label,
+            jsonl_path,
+            args,
+            manifests,
+            expected_contacts,
+            config_clip_options,
+            config_contact_labels,
+        )
         hypothesis_path = os.path.join(args.out_dir, f"{output_stem(label)}_hypotheses.json")
         write_json(hypothesis_path, result)
         print(f"wrote {hypothesis_path}")

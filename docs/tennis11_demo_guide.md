@@ -38,6 +38,8 @@ Good current claim:
 - A source-video label pass says every real game-2 serve is from the near end:
   accepted far-side contacts are rally shots, while four real near-side serves
   (`f623`, `f2517`, `f3506`, `f4183`) sit in the suppressed set.
+- The detailed audit reports this as contact-label evidence: 5 of 9 accepted
+  game-2 contacts are labelled serves, and 4 labelled serves are suppressed.
 - Game 2 also has a tracker anomaly absent from game 1: 159 large ball
   detections in the top image band, consistent with the f183 phantom-ball
   diagnosis. Treat game-2 ball-derived landings as review evidence, not truth.

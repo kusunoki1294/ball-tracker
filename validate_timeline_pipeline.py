@@ -222,6 +222,8 @@ def validate_outputs(output_dir):
             "serve_motions": 17,
             "suppressed_rally_motions": 8,
             "top_band_large_ball_detections": 159,
+            "accepted_serve_fraction": 0.556,
+            "suppressed_verified_serves": 4,
             "contact_evaluation": None,
             "single_server": False,
         },
@@ -271,6 +273,25 @@ def validate_outputs(output_dir):
         elif vote is not None:
             errors.append(f"{label}: expected no single_server_vote")
         evaluation = clip.get("contact_evaluation")
+        label_evaluation = clip.get("contact_label_evaluation")
+        if "accepted_serve_fraction" in expected_values:
+            if not label_evaluation:
+                errors.append(f"{label}: expected contact label evaluation")
+            elif label_evaluation.get("accepted_serve_fraction") != expected_values["accepted_serve_fraction"]:
+                errors.append(
+                    f"{label}: expected accepted_serve_fraction="
+                    f"{expected_values['accepted_serve_fraction']}, got "
+                    f"{label_evaluation.get('accepted_serve_fraction')}"
+                )
+            elif (
+                label_evaluation.get("suppressed_verified_serves")
+                != expected_values["suppressed_verified_serves"]
+            ):
+                errors.append(
+                    f"{label}: expected suppressed_verified_serves="
+                    f"{expected_values['suppressed_verified_serves']}, got "
+                    f"{label_evaluation.get('suppressed_verified_serves')}"
+                )
         if "contact_evaluation" in expected_values and expected_values["contact_evaluation"] is None:
             if evaluation is not None:
                 errors.append(f"{label}: expected no contact_evaluation")
