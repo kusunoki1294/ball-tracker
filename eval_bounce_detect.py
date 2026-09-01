@@ -104,7 +104,7 @@ def distributions(bounces, label):
 LABELS_TENNIS11 = "labels/tennis11_game1_bounce_labels.csv"
 
 
-def check_label_alignment(bounces, path, tolerance=3):
+def check_label_alignment(bounces, path, tolerance=3, accept_shifted=False):
     """Fail loudly when hand labels no longer line up with detector output.
 
     Labels are keyed by frame. Any detector change that re-localises a bounce by
@@ -137,20 +137,23 @@ def check_label_alignment(bounces, path, tolerance=3):
     print(f"label alignment: {exact} exact, {len(shifted)} shifted, "
           f"{len(stale)} stale, {len(unlabelled)} unlabelled")
     if shifted:
-        # Not fatal - most shifts are the same bounce re-localised by a frame.
-        # But not free either: when aa8f69b moved four rows, one of them
-        # (f2898 -> f2899) landed on empty court and stopped being the racket
-        # contact its label claimed. A shift carries the label to a new frame
-        # without re-checking what is actually there.
         print("   shifted: " + ", ".join(f"{a}->{b}" for a, b in shifted))
+    if not stale and not unlabelled and (accept_shifted or not shifted):
+        return 0
+    if shifted and not accept_shifted:
+        # Deliberately fatal. A shift silently carries a label to a frame nobody
+        # re-checked, which is the failure this guard exists to stop: when
+        # aa8f69b moved four rows, f2898 -> f2899 landed on empty court and
+        # stopped being the racket contact its label claimed. Warning was tried
+        # first and is too weak - a line on stderr during a long run is exactly
+        # what gets missed.
         print(
-            f"   WARNING: {len(shifted)} label(s) were carried to a new frame. A shift "
-            f"can change what the row describes - re-check these against the video "
-            f"rather than assuming the label moved with the event.",
+            f"   SHIFTED labels carried to new frames: "
+            + ", ".join(f"{a}->{b}" for a, b in shifted)
+            + ". Re-check each against the video, then rebuild the CSV. Pass "
+              "--accept-shifted-labels once you have.",
             file=sys.stderr,
         )
-    if not stale and not unlabelled:
-        return 0
     if stale:
         print(f"   STALE label rows with no detection within {tolerance} frames: {stale}",
               file=sys.stderr)
@@ -172,6 +175,12 @@ def main():
         action="store_true",
         help="fail when labels/tennis11_game1_bounce_labels.csv no longer aligns "
              "with detector output",
+    )
+    parser.add_argument(
+        "--accept-shifted-labels",
+        action="store_true",
+        help="treat labels carried to a nearby frame as reviewed (use only after "
+             "re-checking them against the video)",
     )
     args = parser.parse_args()
 
@@ -271,7 +280,9 @@ def main():
         print(f"wrote {args.review_csv} "
               f"(label column: live_bounce | dead_bounce | racket | tracking_artifact)")
     if args.check_labels:
-        return check_label_alignment(bounces11, LABELS_TENNIS11)
+        return check_label_alignment(
+            bounces11, LABELS_TENNIS11, accept_shifted=args.accept_shifted_labels
+        )
     return 0
 
 
