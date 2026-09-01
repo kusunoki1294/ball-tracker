@@ -517,7 +517,7 @@ def second_serve_grouping_evidence(
         max(RALLY_MIN_TRACKED_SECONDS, SECOND_SERVE_MIN_TRACKED_SECONDS),
         fps,
     )
-    enough_track = tracked >= min_tracked
+    enough_track = tracked >= min_tracked and fraction is not None
     return {
         "gap_frames": attempt["contact_frame"] - previous_attempt["contact_frame"],
         "ball_return_fraction": round(fraction, 3) if fraction is not None else None,
@@ -646,6 +646,19 @@ def build_hypotheses(
                     previous,
                     second_serve_evidence,
                     "suppressed_rally_motion_not_point_start",
+                    fps,
+                )
+                continue
+            if (
+                previous_can_still_be_rally
+                and gap <= max_rally_continuation_gap
+                and second_serve_evidence.get("stuck_track_dominates")
+            ):
+                mark_suppressed_motion(
+                    attempt,
+                    previous,
+                    second_serve_evidence,
+                    "suppressed_rally_motion_insufficient_return_evidence",
                     fps,
                 )
                 continue

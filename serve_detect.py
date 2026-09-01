@@ -263,16 +263,16 @@ def ball_return_evidence(by_frame, first_frame, last_frame, server, inv_homograp
     )
     tracked = len(samples)
     returned = sum(1 for sample in samples if sample["returned"] is True)
-    fraction = (
-        None
-        if tracked < frame_window(RALLY_MIN_TRACKED_SECONDS, fps)
-        else returned / float(tracked)
-    )
     stuck = _longest_stuck_run(samples, fps)
     stuck_fraction = stuck["frames"] / float(tracked) if tracked else 0.0
     stuck_dominates = (
         stuck["frames"] >= frame_window(STUCK_RETURN_TRACK_MIN_SECONDS, fps)
         and stuck_fraction >= STUCK_RETURN_TRACK_DOMINANCE_FRACTION
+    )
+    fraction = (
+        None
+        if tracked < frame_window(RALLY_MIN_TRACKED_SECONDS, fps) or stuck_dominates
+        else returned / float(tracked)
     )
     return {
         "ball_return_fraction": fraction,

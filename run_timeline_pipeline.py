@@ -235,6 +235,27 @@ def output_stem(label):
     return stem or "clip"
 
 
+def legacy_output_stem(label):
+    safe = []
+    for char in label.lower():
+        if char.isalnum() or char in ("-", "_"):
+            safe.append(char)
+    stem = "".join(safe).strip("_")
+    return stem or "clip"
+
+
+def remove_stale_hypothesis_outputs(out_dir, labels):
+    for label in labels:
+        current = output_stem(label)
+        legacy = legacy_output_stem(label)
+        if legacy == current:
+            continue
+        path = os.path.join(out_dir, f"{legacy}_hypotheses.json")
+        if os.path.exists(path):
+            os.unlink(path)
+            print(f"removed stale {path}")
+
+
 def ensure_parent(path):
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
@@ -811,6 +832,7 @@ def main():
         )
 
     os.makedirs(args.out_dir, exist_ok=True)
+    remove_stale_hypothesis_outputs(args.out_dir, labels)
     report_clips = []
     rendered_videos = {}
     clip_jsonls = {}

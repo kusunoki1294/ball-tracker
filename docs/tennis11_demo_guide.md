@@ -45,6 +45,8 @@ Good current claim:
 - The f786 game-1 control also carries a stuck-track warning in the detailed
   JSON: the suppressor's rally evidence is correct on outcome but weak on
   mechanism, so that metric should not be tuned blindly.
+- That warning does not explain the four verified game-2 serves that remain in
+  the suppressed set; those are still a separate suppression/recall problem.
 
 Do not claim:
 

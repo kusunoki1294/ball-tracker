@@ -96,6 +96,9 @@ def validate_config_video_alignment():
 
 
 def validate_outputs(output_dir):
+    for legacy_name in ("game1_hypotheses.json", "game2_hypotheses.json"):
+        with open(os.path.join(output_dir, legacy_name), "w", encoding="utf-8") as handle:
+            json.dump({"stale": True}, handle)
     run(
         [
             pipeline_python(),
@@ -150,6 +153,9 @@ def validate_outputs(output_dir):
                 errors.append(f"timeline demo must surface review priority {frame}")
         if "f623 · 206.8s" not in demo:
             errors.append("timeline demo must derive f623 source timestamp from frame and clip start")
+    for legacy_name in ("game1_hypotheses.json", "game2_hypotheses.json"):
+        if os.path.exists(os.path.join(output_dir, legacy_name)):
+            errors.append(f"timeline runner must remove stale {legacy_name}")
 
     expected_contact_assets = {
         "game1_serve_contact_review": 52,

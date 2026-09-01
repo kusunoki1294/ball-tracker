@@ -73,10 +73,15 @@ FORBIDDEN_LANDING_STATES = {"first_serve_in", "second_serve_in", "first_serve_fa
 # checking only the resulting attempt count would pass even if a guard broke and
 # the other happened to cover for it.
 EXPECTED_SECOND_SERVE_REJECTIONS = {
-    # A rally was under way: the ball came back over the net between the strikes,
-    # so point 2's second detected motion is a rally stroke played from behind
-    # the baseline, not a second serve.
-    2: ("ball_returned_over_net_between_strikes", 2),
+    # Point 2's second motion is a rally stroke, and it must not be promoted --
+    # but the reason matters. This used to assert that the ball was seen coming
+    # back over the net. It was not: 33 of the 77 tracked frames in that window
+    # are one stuck track, the ball sitting motionless at the net from f652 to
+    # f684, and the return fraction was produced by that artefact rather than by
+    # observed rally traffic. The right verdict for the wrong reason. The
+    # detector now reports stuck-dominated windows as having no usable evidence,
+    # so the rejection is honest about what was actually seen.
+    2: ("insufficient_ball_track_between_strikes", 2),
     # The far-extension candidate at 2491 has no toss of its own; it is the
     # server waiting to receive.
     5: ("next_motion_has_no_tracked_toss", 2),
