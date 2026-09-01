@@ -11,6 +11,12 @@ PANEL_COLOR = (20, 24, 28)
 SHOT_COLOR = (255, 0, 255)
 FAULT_COLOR = (0, 120, 255)
 BOUNCE_COLOR = (0, 0, 255)
+# A bounce shown on weak evidence must not look like one shown on strong
+# evidence. Same hue as a confirmed bounce so it still reads as a bounce, but a
+# hollow ring rather than a solid cross. Fading it to grey was tried first and
+# was worse: on a bright court it became nearly invisible, which hides the
+# evidence instead of qualifying it.
+PROVISIONAL_BOUNCE_COLOR = BOUNCE_COLOR
 TEXT_SHADOW = (0, 0, 0)
 
 
@@ -106,6 +112,23 @@ def analysis_bounce_visible(bounce, serve_bounce_ids):
     return bool(bounce.get("rally_scoring_eligible", True))
 
 
+def bounce_is_provisional(bounce, serve_bounce_ids):
+    """True when a visible bounce is not standing on its own evidence.
+
+    Two cases, both of which currently render identically to a confirmed bounce:
+    the detector graded it low confidence, or it is below the rally-scoring bar
+    and is on screen only because a serve attempt claimed it as its landing.
+    Point 3's first-serve fault (bounce_023) is the second kind - deliberately
+    consumed despite failing serve_landing_precondition, which is a judgement a
+    viewer should be able to see rather than infer.
+    """
+    if bounce.get("detector_confidence") == "low":
+        return True
+    return bounce.get("id") in serve_bounce_ids and not bounce.get(
+        "rally_scoring_eligible", True
+    )
+
+
 def main():
     args = parse_args()
     analysis = load_analysis(args.analysis)
@@ -179,10 +202,12 @@ def main():
         if not point or not analysis_bounce_visible(bounce, serve_bounce_ids):
             continue
         visible_bounce_count += 1
+        provisional = bounce_is_provisional(bounce, serve_bounce_ids)
         bounces_by_frame.setdefault(int(bounce["frame"]), []).append(
             {
                 "point": (int(round(point[0])), int(round(point[1]))),
-                "label": f"B{visible_bounce_count}",
+                "label": f"B{visible_bounce_count}" + ("?" if provisional else ""),
+                "provisional": provisional,
             }
         )
 
@@ -277,15 +302,20 @@ def main():
 
         for item in active_bounce_markers:
             x, y = item["point"]
-            cv2.drawMarker(
-                frame,
-                (x, y),
-                BOUNCE_COLOR,
-                markerType=cv2.MARKER_TILTED_CROSS,
-                markerSize=18,
-                thickness=2,
-            )
-            draw_text(frame, item["label"], (x + 8, max(20, y - 8)), scale=0.5, color=BOUNCE_COLOR, thickness=2)
+            provisional = item.get("provisional")
+            color = PROVISIONAL_BOUNCE_COLOR if provisional else BOUNCE_COLOR
+            if provisional:
+                cv2.circle(frame, (x, y), 9, color, 2, cv2.LINE_AA)
+            else:
+                cv2.drawMarker(
+                    frame,
+                    (x, y),
+                    color,
+                    markerType=cv2.MARKER_TILTED_CROSS,
+                    markerSize=18,
+                    thickness=2,
+                )
+            draw_text(frame, item["label"], (x + 8, max(20, y - 8)), scale=0.5, color=color, thickness=2)
 
         for item in active_labels:
             x, y = item["point"]
