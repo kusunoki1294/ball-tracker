@@ -935,6 +935,14 @@ def serve_attempt_from_motion(
     attempt["contact_frame"] = motion["contact_frame"]
     attempt["contact_source"] = motion.get("source")
     attempt["contact_confidence"] = motion.get("confidence")
+    # How well the bounce detector saw the landing this verdict rests on. The
+    # in/out call is pure geometry on a single detected point, so a weakly
+    # detected landing makes a weakly supported verdict no matter how clean the
+    # geometry looks -- point 4's fault sits 1.8ft outside the service line on a
+    # low-confidence bounce, which is a smaller margin than that confidence
+    # justifies.
+    attempt["landing_detector_confidence"] = bounce.get("detector_confidence")
+    attempt["landing_shape_confidence"] = bounce.get("detector_shape_confidence")
     if attempt["result"] == "not_a_serve":
         # The strike is no longer in doubt, so a bounce on the server's own side
         # this soon after it is a mis-projected landing point rather than proof
@@ -1020,6 +1028,26 @@ def infer_serve_sequence_from_motions(
             earlier["result"] = "fault"
             earlier["reason"] = "inferred_fault_second_serve_followed"
 
+    # A verdict must not be asserted more confidently than the landing it was
+    # read off. Caller-asserted overrides are exempt: those are ground truth
+    # supplied from outside, not inferences from this evidence.
+    landing_confidence = min_quality(
+        *[
+            quality
+            for attempt in attempts
+            for quality in (
+                attempt.get("landing_detector_confidence"),
+                attempt.get("landing_shape_confidence"),
+            )
+            if quality
+        ]
+    )
+
+    def capped(confidence):
+        if landing_confidence in (None, "unknown"):
+            return confidence
+        return min_quality(confidence, landing_confidence)
+
     first_contact = attempts[0]["contact_frame"] if attempts else None
     contact_frames = [attempt["contact_frame"] for attempt in attempts]
     extra = {
@@ -1076,7 +1104,7 @@ def infer_serve_sequence_from_motions(
             receiver,
             attempts,
             "double_fault",
-            "medium",
+            capped("medium"),
             ["serve_struck_twice_both_landed_out"],
             post_second_serve_bounces=max(0, len(point_bounces) - 2),
             official_override=False,
@@ -1087,12 +1115,12 @@ def infer_serve_sequence_from_motions(
         state = "second_serve_in" if len(attempts) >= 2 else "first_serve_in"
         return serve_state_result(
             "second_serve_in" if len(attempts) >= 2 else "serve_in",
-            None, None, attempts, state, "high",
+            None, None, attempts, state, capped("high"),
             ["serve_struck_and_landed_in"], **extra,
         )
     if last["result"] == "fault":
         return serve_state_result(
-            "first_serve_fault", None, None, attempts, "first_serve_fault", "medium",
+            "first_serve_fault", None, None, attempts, "first_serve_fault", capped("medium"),
             ["serve_struck_and_landed_out"], **extra,
         )
     # The strike was located but its bounce never was, so the serve happened and
