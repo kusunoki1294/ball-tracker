@@ -26,6 +26,7 @@ that file is what would let precision be scored honestly.
 """
 import argparse
 import csv
+import os
 import json
 import sys
 
@@ -100,10 +101,78 @@ def distributions(bounces, label):
               f"p50={np.percentile(values,50):>7.2f} p90={np.percentile(values,90):>7.2f}")
 
 
+LABELS_TENNIS11 = "labels/tennis11_game1_bounce_labels.csv"
+
+
+def check_label_alignment(bounces, path, tolerance=3):
+    """Fail loudly when hand labels no longer line up with detector output.
+
+    Labels are keyed by frame. Any detector change that re-localises a bounce by
+    a frame or two silently breaks that join: rows still match by nearest-frame
+    and quietly describe the wrong event. That has already happened once, when
+    the anchor fix moved four detections and relabelled none of them, and it was
+    caught by hand rather than by anything here.
+    """
+    if not os.path.exists(path):
+        print(f"label alignment: {path} not found, skipping")
+        return 0
+    with open(path, newline="") as handle:
+        labels = [row for row in csv.DictReader(handle)]
+    label_frames = sorted(int(row["frame"]) for row in labels)
+    detected = sorted(b["frame"] for b in bounces)
+    used, exact, shifted = set(), 0, []
+    for frame in detected:
+        if frame in label_frames and frame not in used:
+            used.add(frame)
+            exact += 1
+            continue
+        near = [f for f in label_frames if f not in used and abs(f - frame) <= tolerance]
+        if near:
+            match = min(near, key=lambda f: abs(f - frame))
+            used.add(match)
+            shifted.append((match, frame))
+    claimed = {frame for frame in detected if frame in used} | {new for _, new in shifted}
+    unlabelled = sorted(set(detected) - claimed)
+    stale = sorted(set(label_frames) - used)
+    print(f"label alignment: {exact} exact, {len(shifted)} shifted, "
+          f"{len(stale)} stale, {len(unlabelled)} unlabelled")
+    if shifted:
+        # Not fatal - most shifts are the same bounce re-localised by a frame.
+        # But not free either: when aa8f69b moved four rows, one of them
+        # (f2898 -> f2899) landed on empty court and stopped being the racket
+        # contact its label claimed. A shift carries the label to a new frame
+        # without re-checking what is actually there.
+        print("   shifted: " + ", ".join(f"{a}->{b}" for a, b in shifted))
+        print(
+            f"   WARNING: {len(shifted)} label(s) were carried to a new frame. A shift "
+            f"can change what the row describes - re-check these against the video "
+            f"rather than assuming the label moved with the event.",
+            file=sys.stderr,
+        )
+    if not stale and not unlabelled:
+        return 0
+    if stale:
+        print(f"   STALE label rows with no detection within {tolerance} frames: {stale}",
+              file=sys.stderr)
+    if unlabelled:
+        print(f"   UNLABELLED detections with no label within {tolerance} frames: {unlabelled}",
+              file=sys.stderr)
+    print("   labels describe a detector output that no longer exists; re-check the "
+          "moved rows against the video and rebuild the CSV before trusting any "
+          "precision or recall number computed from it.", file=sys.stderr)
+    return 1
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--review-csv", help="Export unmatched detections for hand labelling.")
+    parser.add_argument(
+        "--check-labels",
+        action="store_true",
+        help="fail when labels/tennis11_game1_bounce_labels.csv no longer aligns "
+             "with detector output",
+    )
     args = parser.parse_args()
 
     bounces9 = run(TENNIS9)
@@ -201,6 +270,8 @@ def main():
                                      b.get("suppressed", 0), ""])
         print(f"wrote {args.review_csv} "
               f"(label column: live_bounce | dead_bounce | racket | tracking_artifact)")
+    if args.check_labels:
+        return check_label_alignment(bounces11, LABELS_TENNIS11)
     return 0
 
 
