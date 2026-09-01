@@ -2423,6 +2423,7 @@ def build_analysis(rows, args):
     return {
         "source_jsonl": args.jsonl,
         "court_calib_file": args.court_calib_file,
+        "bounce_source": args.bounce_source,
         "fps": args.fps,
         "players": {
             "order": player_order,
