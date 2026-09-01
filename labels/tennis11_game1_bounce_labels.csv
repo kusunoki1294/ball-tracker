@@ -18,7 +18,7 @@ idx,frame,seconds,side,world_x,world_y,shape_confidence,confidence,near_player,r
 17,967,32.23,near,23.7,66.14,high,low,True,False,True,sampled,5.121,7.6,0.39,racket,near player contact
 18,992,33.07,near,27.25,53.51,low,low,True,False,False,sampled,8.418,14.21,5.45,racket,racket contact (re-keyed from f991 after aa8f69b)
 19,1013,33.77,far,14.88,27.33,high,high,False,True,True,sampled,8.323,2.46,0.08,ambiguous,"far service box, ball too small to adjudicate"
-20,1075,35.83,near,16.95,73.91,high,low,True,False,True,sampled,4.741,5.62,1.11,live_bounce,deep near-court bounce
+20,1075,35.83,near,16.95,73.91,high,low,True,False,True,sampled,4.741,5.62,1.11,racket,"ball is inside the racket hoop at the detected frame (sequence f1069-f1081 shows it arriving and being struck); previously mislabelled live_bounce ""deep near-court bounce"""
 21,1104,36.8,far,14.69,21.65,high,high,False,True,True,sampled,13.431,9.85,0.93,ambiguous,"far service box, ball too small to adjudicate"
 22,1145,38.17,far,37.58,0.78,medium,medium,False,True,True,interpolated,12.168,5.19,0.94,live_bounce,ball landing OUT beyond far baseline/sideline
 23,1511,50.37,far,-1.19,3.44,low,low,False,False,False,sampled,7.495,3.47,3.84,live_bounce,"P3 first serve landing, wide and long = fault"
