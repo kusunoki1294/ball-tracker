@@ -97,6 +97,12 @@ def parse_args():
         help="Render configured hypothesis overlay videos after writing JSON/HTML outputs.",
     )
     parser.add_argument(
+        "--allow-stale-videos",
+        action="store_true",
+        help="bundle even when a configured review MP4 is older than the hypotheses "
+             "JSON it depicts (the video will describe a state the JSON no longer matches)",
+    )
+    parser.add_argument(
         "--render-max-frames",
         type=int,
         default=0,
@@ -537,6 +543,21 @@ def write_demo_index(
         handle.write(document)
 
 
+def stale_render_reason(video_path, hypothesis_path):
+    """Return why `video_path` cannot be trusted to depict `hypothesis_path`, or None.
+
+    A review MP4 burns hypothesis text into its frames, so a video older than the
+    JSON it was rendered from shows a state the JSON no longer matches. HTML and
+    contact sheets regenerate on every run but video rendering is opt-in behind
+    --render-videos, so a plain run silently mixes fresh pages with an old video.
+    """
+    if not os.path.exists(video_path):
+        return "missing"
+    if os.path.getmtime(video_path) < os.path.getmtime(hypothesis_path):
+        return "stale"
+    return None
+
+
 def write_demo_bundle(
     path,
     demo_index,
@@ -835,6 +856,7 @@ def main():
     remove_stale_hypothesis_outputs(args.out_dir, labels)
     report_clips = []
     rendered_videos = {}
+    unrefreshed_videos = []
     clip_jsonls = {}
     for label, jsonl_path in clips:
         clip_jsonls[label] = jsonl_path
@@ -858,6 +880,9 @@ def main():
             )
         elif label in config_renders:
             existing_render = render_output_path(config_renders[label], args)
+            reason = stale_render_reason(existing_render, hypothesis_path)
+            if reason is not None:
+                unrefreshed_videos.append((label, existing_render, reason))
             if os.path.exists(existing_render):
                 rendered_videos[label] = existing_render
         if label in config_contact_reviews and label in config_renders:
@@ -903,6 +928,28 @@ def main():
     print(f"wrote {audit_json}")
     print(f"wrote {demo_index}")
     if args.bundle_demo:
+        stale = [item for item in unrefreshed_videos if item[2] == "stale"]
+        missing = [item for item in unrefreshed_videos if item[2] == "missing"]
+        for label, path, _ in missing:
+            print(
+                f"WARNING: {label}: no review MP4 at {path}; the bundle will omit it. "
+                f"Re-run with --render-videos to include it.",
+                file=sys.stderr,
+            )
+        if stale:
+            detail = "; ".join(
+                f"{label}: {path} is older than its hypotheses JSON" for label, path, _ in stale
+            )
+            message = (
+                f"refusing to bundle: {len(stale)} review MP4(s) describe a state the "
+                f"hypotheses JSON no longer matches ({detail}). Video rendering is opt-in, "
+                f"so a run without --render-videos leaves the old video beside fresh pages. "
+                f"Re-run with --render-videos, or pass --allow-stale-videos to bundle anyway."
+            )
+            if not args.allow_stale_videos:
+                print(f"ERROR: {message}", file=sys.stderr)
+                raise SystemExit(3)
+            print(f"WARNING: {message}", file=sys.stderr)
         bundle_path = bundle_output_path(args)
         write_demo_bundle(
             bundle_path,

@@ -9,6 +9,7 @@ import the scoring/tracker stacks, and its compact JSON must not emit
 import json
 import os
 import subprocess
+import time
 import sys
 import tempfile
 
@@ -92,6 +93,56 @@ def validate_config_video_alignment():
             errors.append(
                 f"{label}: configured video has {source_frames} frames but JSONL max frame is {log_frames}"
             )
+    return errors
+
+
+def validate_stale_video_guard(output_dir):
+    """The bundler must refuse when a review MP4 predates the JSON it depicts.
+
+    Video rendering is opt-in behind --render-videos while pages regenerate every
+    run, so without this guard a plain --bundle-demo ships fresh HTML beside a
+    video burned with older hypothesis text.
+    """
+    import run_timeline_pipeline
+
+    errors = []
+
+    fresh_json = os.path.join(output_dir, "_guard_probe.json")
+    fresh_video = os.path.join(output_dir, "_guard_probe.mp4")
+    with open(fresh_json, "w", encoding="utf-8") as handle:
+        handle.write("{}")
+    time.sleep(0.02)
+    with open(fresh_video, "w", encoding="utf-8") as handle:
+        handle.write("")
+    if run_timeline_pipeline.stale_render_reason(fresh_video, fresh_json) is not None:
+        errors.append("a video newer than its hypotheses JSON must not be called stale")
+    os.utime(fresh_video, (0, 0))
+    if run_timeline_pipeline.stale_render_reason(fresh_video, fresh_json) != "stale":
+        errors.append("a video older than its hypotheses JSON must be reported stale")
+    os.unlink(fresh_video)
+    if run_timeline_pipeline.stale_render_reason(fresh_video, fresh_json) != "missing":
+        errors.append("an absent video must be reported missing")
+    os.unlink(fresh_json)
+
+    for name in ("game1_timeline_hypotheses.mp4", "game2_timeline_hypotheses.mp4"):
+        path = os.path.join(output_dir, name)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("")
+        os.utime(path, (0, 0))
+    command = [
+        pipeline_python(),
+        "run_timeline_pipeline.py",
+        "--config",
+        TIMELINE_CONFIG,
+        "--out-dir",
+        output_dir,
+        "--bundle-demo",
+    ]
+    completed = subprocess.run(command, check=False, text=True, capture_output=True)
+    if completed.returncode == 0:
+        errors.append("bundling must fail when a configured review MP4 is stale")
+    elif "refusing to bundle" not in completed.stderr:
+        errors.append("stale-video refusal must say why it refused")
     return errors
 
 
@@ -413,6 +464,7 @@ def main():
     errors.extend(validate_contested_single_server_vote())
     with tempfile.TemporaryDirectory() as tmpdir:
         errors.extend(validate_outputs(tmpdir))
+        errors.extend(validate_stale_video_guard(tmpdir))
     if errors:
         for error in errors:
             print(error, file=sys.stderr)
