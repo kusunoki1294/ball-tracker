@@ -12,15 +12,19 @@ game 1. Can it be relaxed without letting racket contacts back in?
 
 ## Answer: no, and the veto should be left alone
 
-It rejects 26 things correctly and costs 3:
+It rejects 27 things correctly and costs 3:
 
 | label | n | near_player=True |
 | --- | ---: | ---: |
-| racket | 14 | **14** |
-| dead_bounce | 10 | **10** |
-| tracking_artifact | 3 | 2 |
+| racket | 13 | **13** |
+| dead_bounce | 9 | **9** |
+| tracking_artifact | 5 | **5** |
 | live_bounce | 12 | 3 |
 | ambiguous | 5 | 2 |
+
+(Counts re-measured 2026-09-01 after the labels were re-aligned to post-`aa8f69b`
+detector output; the earlier draft cited 14/10/3 against the stale keying. The
+conclusion is unchanged and slightly stronger: 27 correct rejections, not 26.)
 
 The three real bounces it costs are `f1075` (deep near-court bounce), `f2253`
 (near-court bounce, shadow confirms ground) and `f2114` (P4 serve landing).
