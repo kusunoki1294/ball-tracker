@@ -1048,6 +1048,11 @@ def infer_serve_sequence_from_motions(
             return confidence
         return min_quality(confidence, landing_confidence)
 
+    def landing_evidence_reasons():
+        if landing_confidence in ("low", "medium"):
+            return [f"landing_evidence_{landing_confidence}_confidence"]
+        return []
+
     first_contact = attempts[0]["contact_frame"] if attempts else None
     contact_frames = [attempt["contact_frame"] for attempt in attempts]
     extra = {
@@ -1105,7 +1110,7 @@ def infer_serve_sequence_from_motions(
             attempts,
             "double_fault",
             capped("medium"),
-            ["serve_struck_twice_both_landed_out"],
+            ["serve_struck_twice_both_landed_out"] + landing_evidence_reasons(),
             post_second_serve_bounces=max(0, len(point_bounces) - 2),
             official_override=False,
             **extra,
@@ -1116,12 +1121,12 @@ def infer_serve_sequence_from_motions(
         return serve_state_result(
             "second_serve_in" if len(attempts) >= 2 else "serve_in",
             None, None, attempts, state, capped("high"),
-            ["serve_struck_and_landed_in"], **extra,
+            ["serve_struck_and_landed_in"] + landing_evidence_reasons(), **extra,
         )
     if last["result"] == "fault":
         return serve_state_result(
             "first_serve_fault", None, None, attempts, "first_serve_fault", capped("medium"),
-            ["serve_struck_and_landed_out"], **extra,
+            ["serve_struck_and_landed_out"] + landing_evidence_reasons(), **extra,
         )
     # The strike was located but its bounce never was, so the serve happened and
     # the analyzer declines to judge where it landed. This is deliberately not a
@@ -1623,7 +1628,21 @@ def find_double_bounce(point_bounces, shot_lookup):
             for shot in shot_lookup.values()
         )
         if not returned:
-            return {"side": side, "first_frame": first_frame, "second_frame": second_frame}
+            return {
+                "side": side,
+                "first_frame": first_frame,
+                "second_frame": second_frame,
+                "first_bounce_id": first.get("id"),
+                "second_bounce_id": second.get("id"),
+                "first_detector_confidence": first.get("detector_confidence"),
+                "first_shape_confidence": first.get("detector_shape_confidence"),
+                "second_detector_confidence": second.get("detector_confidence"),
+                "second_shape_confidence": second.get("detector_shape_confidence"),
+                "first_world_point": first_world,
+                "second_world_point": second_world,
+                "second_in_bounds": world_point_in_bounds(second_world, margin=2.0),
+                "second_inside_court": world_point_in_bounds(second_world, margin=0.0),
+            }
     return None
 
 
@@ -1654,15 +1673,28 @@ def classify_point_end(
     double_bounce = find_double_bounce(point_bounces, shot_lookup)
     if double_bounce:
         loser = double_bounce["side"]
+        bounce_evidence = min_quality(
+            double_bounce.get("first_detector_confidence"),
+            double_bounce.get("first_shape_confidence"),
+            double_bounce.get("second_detector_confidence"),
+            double_bounce.get("second_shape_confidence"),
+        )
+        confidence = min_quality("medium", bounce_evidence)
+        if confidence == "unknown":
+            confidence = "low"
+        if bounce_evidence and bounce_evidence != "high":
+            reasons.append(f"double_bounce_detector_evidence_{bounce_evidence}")
+        if not double_bounce.get("second_inside_court", True):
+            review_flags.append("double_bounce_second_bounce_out_of_bounds")
         return {
             "type": "double_bounce",
-            "confidence": "medium",
+            "confidence": confidence,
             "reasons": reasons + ["two_bounces_same_side_no_return"],
             "review_flags": review_flags,
             "terminal_contact": terminal_contact,
             "double_bounce": double_bounce,
             "inferred_winner": side_opponent(loser),
-            "scoring_eligible": True,
+            "scoring_eligible": quality_at_least(confidence, "medium"),
         }
 
     if terminal_state.get("status") == "net":
