@@ -64,6 +64,15 @@ def export_csv(analysis, path):
         "bounce_pattern",
         "bounce_world_x",
         "bounce_world_y",
+        # Detector-side provenance. Without these a reviewer can see THAT a
+        # bounce is live and scoring-eligible but not why the detector believed
+        # it, so a marker with no ball under it (tennis11 f3157) reads as clean.
+        "detector_confidence",
+        "detector_shape_confidence",
+        "detector_provenance",
+        "detector_near_player",
+        "detector_rally_scoring_eligible",
+        "detector_serve_landing_precondition",
         "serve_status",
         "serve_state",
         "serve_confidence",
@@ -128,6 +137,14 @@ def export_csv(analysis, path):
                     "bounce_pattern": bounce.get("pattern"),
                     "bounce_world_x": world[0],
                     "bounce_world_y": world[1],
+                    "detector_confidence": bounce.get("detector_confidence"),
+                    "detector_shape_confidence": bounce.get("detector_shape_confidence"),
+                    "detector_provenance": bounce.get("provenance"),
+                    "detector_near_player": bounce.get("near_player"),
+                    "detector_rally_scoring_eligible": bounce.get("rally_scoring_eligible"),
+                    "detector_serve_landing_precondition": bounce.get(
+                        "serve_landing_precondition"
+                    ),
                     "serve_status": point.get("serve_status"),
                     "serve_state": point.get("serve_state"),
                     "serve_confidence": point.get("serve_confidence"),

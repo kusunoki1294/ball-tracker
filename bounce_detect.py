@@ -174,6 +174,17 @@ def _arc_fit(samples, at_frame):
             float(cx[-1]), float(cy[-1]))
 
 
+def tracker_filled(ball):
+    """True when the tracker invented this position instead of observing a ball.
+
+    `coast`/`interpolated` rows carry the tracker's own guess forward at ~0.05
+    confidence. They look identical to observations in the log, so fitting
+    through them lets a fabricated position both distort an arc and anchor a
+    bounce at a spot where no ball was ever seen.
+    """
+    return bool(ball.get("interpolated")) or ball.get("motion_gate") == "coast"
+
+
 def ball_samples(rows):
     """(frame, centre_x, centre_y, contact_x, contact_y) for every tracked ball."""
     out = []
@@ -269,6 +280,15 @@ def detect_bounces(rows, calib_points, params=None):
             # and at a real bounce they must agree: that agreement doubles as a
             # quality check.
             here = by_frame.get(frame)
+            # A coast/interpolated row is the tracker's own guess carried forward,
+            # not an observation, but it sits in the log looking like one. Fitting
+            # THROUGH it is tolerable -- it is close to the truth between real
+            # samples -- but anchoring a bounce ON it asserts a bounce where no
+            # ball was seen (tennis11 f3157: "no ball visible at marker").
+            anchor_row = rows_by_frame.get(frame)
+            anchor_ball = (anchor_row or {}).get("ball") or {}
+            if here is not None and tracker_filled(anchor_ball):
+                continue
             join_error_px = float(np.hypot(x_b - x_a, y_b - y_a))
             # Normalise immediately: speed is already known from the two fits, and
             # gating on raw pixels here would drop exactly the fast interpolated
