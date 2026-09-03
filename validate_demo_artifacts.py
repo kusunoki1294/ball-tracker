@@ -16,6 +16,18 @@ import zipfile
 DEFAULT_ANALYSIS_MANIFEST = "manifests/tennis11_game1_manifest.json"
 DEFAULT_TIMELINE_CONFIG = "timeline_configs/tennis11_games1_2.json"
 LEGACY_BOUNCE_EVIDENCE_SENTINEL = "not_available_jsonl_bounce_source"
+SCORING_KEYS = {
+    "winner",
+    "winner_player",
+    "winner_source",
+    "score_after",
+    "point_score_before",
+    "game_score_after",
+    "set_score_after",
+    "games",
+    "sets",
+    "point_frames",
+}
 
 
 def parse_args():
@@ -68,6 +80,45 @@ def require_text(errors, path, snippets, label):
     for snippet in snippets:
         if snippet not in content:
             errors.append(f"{label}: {path} missing {snippet!r}")
+
+
+def scoring_key_paths(value, path="$"):
+    hits = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_path = f"{path}.{key}"
+            if key in SCORING_KEYS:
+                hits.append(child_path)
+            hits.extend(scoring_key_paths(child, child_path))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            hits.extend(scoring_key_paths(child, f"{path}[{index}]"))
+    return hits
+
+
+def validate_timeline_hypothesis_contract(errors, data, label):
+    forbidden = scoring_key_paths(data)
+    if forbidden:
+        errors.append(f"{label}: timeline hypotheses contain scoring keys: {', '.join(forbidden)}")
+    summary = data.get("summary") or {}
+    serve_motion_count = summary.get("serve_motion_hypotheses")
+    compatibility_count = summary.get("point_hypotheses")
+    if serve_motion_count is None:
+        errors.append(f"{label}: summary missing serve_motion_hypotheses")
+    elif serve_motion_count != compatibility_count:
+        errors.append(
+            f"{label}: serve_motion_hypotheses={serve_motion_count} does not match "
+            f"point_hypotheses={compatibility_count}"
+        )
+    for hypothesis in data.get("hypotheses") or []:
+        item_label = hypothesis.get("display_id") or hypothesis.get("id")
+        for key in ("start_frame", "end_frame", "start_source", "end_source"):
+            if hypothesis.get(key) is None:
+                errors.append(f"{label} {item_label}: missing {key}")
+        if hypothesis.get("starts_have_no_truth") is not True:
+            errors.append(f"{label} {item_label}: missing starts_have_no_truth=true")
+        if hypothesis.get("ends_have_no_truth") is not True:
+            errors.append(f"{label} {item_label}: missing ends_have_no_truth=true")
 
 
 def validate_main_analysis(manifest_path):
@@ -145,6 +196,12 @@ def validate_timeline(config_path):
         label = clip.get("label") or "unknown"
         stem = label.replace(" ", "_")
         hypothesis = os.path.join(out_dir, f"{stem}_hypotheses.json")
+        if check_exists(errors, hypothesis, f"{label} hypotheses JSON"):
+            validate_timeline_hypothesis_contract(
+                errors,
+                load_json(hypothesis),
+                f"{label} hypotheses JSON",
+            )
         render = os.path.join(out_dir, clip.get("render_output", ""))
         check_newer(errors, render, hypothesis, f"{label} timeline MP4")
         contact_review = os.path.join(out_dir, clip.get("contact_review_output", ""))
@@ -157,6 +214,11 @@ def validate_timeline(config_path):
             errors.append("timeline audit JSON must carry not_scoring_truth=true")
         if "point_frames" in payload:
             errors.append("timeline audit JSON must not contain point_frames")
+        forbidden = scoring_key_paths(audit)
+        if forbidden:
+            errors.append(
+                "timeline audit JSON contains scoring keys: " + ", ".join(forbidden)
+            )
         clips = {clip.get("label"): clip for clip in audit.get("clips") or []}
         game1 = clips.get("game 1") or {}
         game2 = clips.get("game 2") or {}
@@ -196,6 +258,20 @@ def validate_timeline(config_path):
     if check_exists(errors, bundle, "timeline bundle"):
         with zipfile.ZipFile(bundle) as archive:
             names = set(archive.namelist())
+            for name in ("game_1_hypotheses.json", "game_2_hypotheses.json"):
+                if name in names:
+                    with archive.open(name) as handle:
+                        data = json.loads(handle.read().decode("utf-8"))
+                    validate_timeline_hypothesis_contract(errors, data, f"bundle {name}")
+            if "timeline_audit.json" in names:
+                with archive.open("timeline_audit.json") as handle:
+                    data = json.loads(handle.read().decode("utf-8"))
+                forbidden = scoring_key_paths(data)
+                if forbidden:
+                    errors.append(
+                        "bundle timeline_audit.json contains scoring keys: "
+                        + ", ".join(forbidden)
+                    )
         required = {
             "timeline_demo.html",
             "timeline_audit.html",
