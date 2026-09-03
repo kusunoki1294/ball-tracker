@@ -481,16 +481,19 @@ Ball-track recall is the bottleneck for full automation
   raw number of frames with a ball. On tennis11 game 1 the tracker reports a
   ball on 62.8% of frames, but after held/coasted repeats only 56.8% are distinct
   real observations. Game 2 drops to 50.3%, and its activity spans fragment more.
-- The remaining tennis9 labelled bounce misses at f1147 and f1401 are diagnosed
-  as tracker association failures, not bounce-detector thresholds. Size
+- The remaining tennis9 labelled bounce misses now split by cause. `f1147` and
+  `f1401` are tracker association failures, not bounce-detector thresholds. Size
   discontinuity and prediction-distance both help find suspicious associations
   for review, but neither is a safe rejection rule: prediction error at real
   bounces overlaps the bad associations, and labelled high-error steps include
-  tracker recoveries that a rejection rule would break. The right next artifact
-  is an association audit report, not a tracker-selection change. See
-  `docs/experiments/tennis9_bounce_recall_misses.md` and
-  `docs/experiments/tennis9_association_signals.md`, followed by
-  `docs/experiments/tennis9_association_labelled_set.md`.
+  tracker recoveries that a rejection rule would break. `f1446` is different:
+  the detector finds the bounce, but non-maximum suppression keeps a nearby
+  racket contact instead. That points to near-court shadow evidence as an audit
+  signal, not another global threshold tweak. See
+  `docs/experiments/tennis9_bounce_recall_misses.md`,
+  `docs/experiments/tennis9_association_signals.md`,
+  `docs/experiments/tennis9_association_labelled_set.md`, and
+  `docs/experiments/tennis9_f1446_suppression.md`.
 - Point timeline automation exists as `timeline_hypotheses.py`, but it is not a
   scoring source. On game 1 it now emits 6 hypotheses for the 6 verified points
   while retaining all 13 serve-like motions for audit; the extra motions are

@@ -4,8 +4,11 @@
 landed far from the tracker's own prediction while tracking continuously. Those
 steps are where the track can jump to a different object — a player's body, a
 ball in someone's hand — after which the poisoned prediction rejects real
-detections behind it. That is the cause of both known tennis9 bounce recall
-misses, `f1147` and `f1401`.
+detections behind it. That is the cause of the two tennis9 bounce recall misses
+driven by association, `f1147` and `f1401`. The third remaining tennis9
+miss, `f1446`, is a different failure class: the bounce detector finds the
+bounce, but suppression keeps a nearby racket contact instead. See
+`docs/experiments/tennis9_f1446_suppression.md`.
 
 ```bash
 .venv/bin/python export_association_audit.py \

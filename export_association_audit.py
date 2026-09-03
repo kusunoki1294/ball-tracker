@@ -3,7 +3,9 @@
 A ball track sometimes jumps to a different object - a player's body, a ball in
 someone's hand - and the tracker's prediction is then poisoned so real
 detections are rejected behind it. That destroys the arc a bounce needs and is
-the cause of both known tennis9 bounce recall misses (f1147, f1401).
+the cause of the tennis9 bounce recall misses at f1147 and f1401. The remaining
+f1446 miss is different: suppression keeps a nearby racket contact over the
+ground bounce, so this audit is not expected to explain every miss.
 
 This lists the steps where that MIGHT have happened. It deliberately does not
 decide. Errors and recoveries are the same jump in opposite directions - at
