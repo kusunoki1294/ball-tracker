@@ -93,6 +93,7 @@ Do not claim:
 Validation:
 
 ```bash
+.venv/bin/python validate_project.py
 .venv/bin/python validate_demo_artifacts.py
 .venv/bin/python validate_timeline_pipeline.py
 .venv/bin/python validate_serve_detection.py
@@ -101,3 +102,5 @@ Validation:
 
 Run `validate_demo_artifacts.py` immediately before showing or sending the
 bundle. It checks the files currently on disk, not just temp regenerated output.
+Run `validate_project.py --full` when you also want the slower regenerated
+timeline-pipeline check.

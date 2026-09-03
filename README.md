@@ -436,17 +436,19 @@ has no ground truth and is labelled that way instead of showing blank metrics.
 
 Validate the timeline path:
 
+    .venv/bin/python validate_project.py
     python validate_timeline_pipeline.py
     .venv/bin/python validate_court_geometry.py
     .venv/bin/python validate_demo_artifacts.py
 
-This check protects the automation boundary: importing the runner must not load
-the scoring/tracker stacks, the compact audit must carry `not_scoring_truth:
-true`, and no generated JSON may contain `point_frames`. The geometry check
-protects the shared image-to-court projection against drifting from the previous
-OpenCV implementation. The demo-artifact smoke check validates the current files
-on disk: report data, fresh review videos, timeline caveats, and the portable
-zip contents.
+`validate_project.py` runs the fast pre-demo suite. Add `--full` to include the
+slower regenerated timeline-pipeline check. These checks protect the automation
+boundary: importing the runner must not load the scoring/tracker stacks, the
+compact audit must carry `not_scoring_truth: true`, and no generated JSON may
+contain `point_frames`. The geometry check protects the shared image-to-court
+projection against drifting from the previous OpenCV implementation. The
+demo-artifact smoke check validates the current files on disk: report data,
+fresh review videos, timeline caveats, and the portable zip contents.
 
 Render a hypothesis-only overlay video for visual review:
 
