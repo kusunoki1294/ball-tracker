@@ -325,35 +325,45 @@ def render_video(video_path, hypotheses_path, output_path, max_frames=0):
     hypothesis_frames = int(data.get("frame_range", {}).get("end_frame") or 0)
     total_frames = max(video_frames, hypothesis_frames, 1)
     writer_path, mp4_output = render_target(output_path)
-    writer = open_writer(writer_path, width, height, fps)
-    if writer is None:
-        raise RuntimeError(f"Could not open output writer: {writer_path}")
-
+    # The temp AVI's lifetime has to cover the WHOLE render, not just the
+    # transcode. Three paths used to leak it: open_writer failing, an exception
+    # or Ctrl-C inside the loop, and a failed transcode. Interrupted renders left
+    # dot-prefixed ~380MB files in the product directory, invisible to a plain ls.
     frame_index = 0
+    writer = None
     try:
-        while True:
-            ok, frame = reader.read()
-            if not ok:
-                break
-            frame_index += 1
-            hypothesis = active_hypothesis(hypotheses, frame_index)
-            draw_panel(frame, hypothesis, frame_index, total_frames)
-            draw_contact_events(frame, events, frame_index)
-            draw_timeline(frame, hypotheses, frame_index, total_frames)
-            writer.write(frame)
-            if frame_index % 600 == 0:
-                print(f"rendered {frame_index}/{total_frames} frames...", flush=True)
-            if max_frames and frame_index >= max_frames:
-                break
-    finally:
-        reader.release()
-        writer.release()
-    if mp4_output:
+        writer = open_writer(writer_path, width, height, fps)
+        if writer is None:
+            raise RuntimeError(f"Could not open output writer: {writer_path}")
         try:
-            transcode_to_mp4(writer_path, mp4_output)
+            while True:
+                ok, frame = reader.read()
+                if not ok:
+                    break
+                frame_index += 1
+                hypothesis = active_hypothesis(hypotheses, frame_index)
+                draw_panel(frame, hypothesis, frame_index, total_frames)
+                draw_contact_events(frame, events, frame_index)
+                draw_timeline(frame, hypotheses, frame_index, total_frames)
+                writer.write(frame)
+                if frame_index % 600 == 0:
+                    print(f"rendered {frame_index}/{total_frames} frames...", flush=True)
+                if max_frames and frame_index >= max_frames:
+                    break
         finally:
-            if os.path.exists(writer_path):
-                os.remove(writer_path)
+            # Release the writer before transcoding so the AVI is flushed.
+            writer.release()
+        if mp4_output:
+            transcode_to_mp4(writer_path, mp4_output)
+    finally:
+        # The reader is released here rather than beside the writer: if
+        # open_writer fails we never enter the inner block, and the reader would
+        # otherwise be left open.
+        reader.release()
+        # Only when mp4_output is set is writer_path ours to delete; otherwise it
+        # IS the requested output.
+        if mp4_output and os.path.exists(writer_path):
+            os.remove(writer_path)
     print(f"rendered {output_path} ({frame_index} frames)")
 
 
