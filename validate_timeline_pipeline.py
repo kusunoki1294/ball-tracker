@@ -13,22 +13,11 @@ import time
 import sys
 import tempfile
 
+from timeline_contract import validate_hypothesis_contract
 from timeline_hypotheses import resolve_single_server_vote
 
 
 TIMELINE_CONFIG = "timeline_configs/tennis11_games1_2.json"
-SCORING_KEYS = {
-    "winner",
-    "winner_player",
-    "winner_source",
-    "score_after",
-    "point_score_before",
-    "game_score_after",
-    "set_score_after",
-    "games",
-    "sets",
-    "point_frames",
-}
 
 
 def pipeline_python():
@@ -136,8 +125,10 @@ def validate_stale_video_guard(output_dir):
         errors.append("an absent video must be reported missing")
     os.unlink(fresh_json)
 
+    stale_probe_dir = os.path.join(output_dir, "_stale_video_guard")
+    os.makedirs(stale_probe_dir, exist_ok=True)
     for name in ("game1_timeline_hypotheses.mp4", "game2_timeline_hypotheses.mp4"):
-        path = os.path.join(output_dir, name)
+        path = os.path.join(stale_probe_dir, name)
         with open(path, "w", encoding="utf-8") as handle:
             handle.write("")
         os.utime(path, (0, 0))
@@ -147,14 +138,17 @@ def validate_stale_video_guard(output_dir):
         "--config",
         TIMELINE_CONFIG,
         "--out-dir",
-        output_dir,
+        stale_probe_dir,
         "--bundle-demo",
     ]
     completed = subprocess.run(command, check=False, text=True, capture_output=True)
     if completed.returncode == 0:
         errors.append("bundling must fail when a configured review MP4 is stale")
     elif "refusing to bundle" not in completed.stderr:
-        errors.append("stale-video refusal must say why it refused")
+        errors.append(
+            "stale-video refusal must say why it refused "
+            f"(exit {completed.returncode}, stderr={completed.stderr[-500:]!r})"
+        )
     return errors
 
 
@@ -410,47 +404,6 @@ def validate_outputs(output_dir):
                         errors.append(
                             f"{label}: expected {key}={expected_values[key]}, got {evaluation.get(key)}"
                         )
-    return errors
-
-
-def scoring_key_paths(value, path="$"):
-    hits = []
-    if isinstance(value, dict):
-        for key, child in value.items():
-            child_path = f"{path}.{key}"
-            if key in SCORING_KEYS:
-                hits.append(child_path)
-            hits.extend(scoring_key_paths(child, child_path))
-    elif isinstance(value, list):
-        for index, child in enumerate(value):
-            hits.extend(scoring_key_paths(child, f"{path}[{index}]"))
-    return hits
-
-
-def validate_hypothesis_contract(path, data):
-    errors = []
-    summary = data.get("summary") or {}
-    serve_motion_count = summary.get("serve_motion_hypotheses")
-    compatibility_count = summary.get("point_hypotheses")
-    if serve_motion_count is None:
-        errors.append(f"{path}: summary missing serve_motion_hypotheses")
-    if serve_motion_count != compatibility_count:
-        errors.append(
-            f"{path}: serve_motion_hypotheses={serve_motion_count} does not match "
-            f"point_hypotheses={compatibility_count}"
-        )
-    forbidden = scoring_key_paths(data)
-    if forbidden:
-        errors.append(f"{path}: timeline hypotheses contain scoring keys: {', '.join(forbidden)}")
-    for hypothesis in data.get("hypotheses") or []:
-        label = hypothesis.get("display_id") or hypothesis.get("id")
-        for key in ("start_frame", "end_frame", "start_source", "end_source"):
-            if hypothesis.get(key) is None:
-                errors.append(f"{path} {label}: missing {key}")
-        if hypothesis.get("starts_have_no_truth") is not True:
-            errors.append(f"{path} {label}: missing starts_have_no_truth=true")
-        if hypothesis.get("ends_have_no_truth") is not True:
-            errors.append(f"{path} {label}: missing ends_have_no_truth=true")
     return errors
 
 
