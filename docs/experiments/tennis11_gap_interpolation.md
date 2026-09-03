@@ -14,8 +14,15 @@ problem (post-processing) or an expensive one (detector/model work).
 
 ## Result: no. Baseline wins on every axis.
 
-Measured against `labels/tennis11_game1_bounce_labels.csv`, where "live" is the
-12 hand-labelled `live_bounce` detections.
+Measured against the then-current `labels/tennis11_game1_bounce_labels.csv`,
+where "live" was the 12 hand-labelled `live_bounce` detections.
+
+Note: on 2026-09-01, `f1075` was re-checked and relabelled from `live_bounce`
+to `racket`, so the current label file has 11 live bounces. The interpolation
+harness was experiment-only and is not preserved in the repo, so the exact table
+below is historical. The decision does not depend on that one row: every
+variant lost known real bounces, and the P5 "recovery" was a seam artifact
+created by smoothing across the gap.
 
 | variant | detections | live recall | new unlabelled | serve windows | P5 |
 | --- | --- | --- | --- | --- | --- |

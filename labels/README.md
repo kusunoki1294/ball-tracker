@@ -14,16 +14,20 @@ play - pre-serve dribbles, post-point), `racket` (player contact: strike, catch,
 toss, or ball carried in hand), `tracking_artifact` (no ball visible at the
 marker), `ambiguous` (deliberately not forced - see `note`).
 
-What it establishes, as of 2026-08:
+What it establishes, as of 2026-09-01:
 
-- Only 3 of 44 are artifacts. The detector rarely fires on nothing; it
-  over-reports REAL ball events that are not rally bounces. That makes this a
-  classification problem, not a detection one.
+- Label counts after re-checking the post-`aa8f69b` detector output:
+  11 `live_bounce`, 14 `racket`, 9 `dead_bounce`, 5 `tracking_artifact`, and 5
+  `ambiguous`.
+- Only 5 of 44 are artifacts. Most detections still fire on a real ball event;
+  the detector's main failure mode is over-reporting real events that are not
+  rally bounces. That makes this primarily a classification problem, not a
+  hallucination problem.
 - `rally_scoring_eligible` contains zero racket contacts and zero dead balls,
-  which is the property rally scoring depends on. Live precision 66.7% inside
-  it, 12.5% outside.
-- `near_player` separates almost all of it: 69.2% live precision when False,
-  9.7% when True.
+  and zero tracking artifacts, which is the property rally scoring depends on.
+  Live precision is 72.7% inside it, 9.1% outside.
+- `near_player` separates almost all of it: 75.0% live precision when False,
+  6.2% when True.
 - `shape_confidence` does NOT predict event type. It grades trajectory quality,
   not what the event is; do not use it as a proxy for correctness.
 - `court_margin_ft=3.0` is optimal against these labels. Tightening to 0 loses

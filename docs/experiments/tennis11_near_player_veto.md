@@ -7,29 +7,31 @@ Author: Federer
 
 `bounce_detect` collapses confidence to `low` whenever a bounce is near a player
 (`confidence = "low" if near_player else shape_confidence`), which makes it
-ineligible for rally scoring. That veto hides three real bounces in tennis11
+ineligible for rally scoring. That veto hides two real bounces in tennis11
 game 1. Can it be relaxed without letting racket contacts back in?
 
 ## Answer: no, and the veto should be left alone
 
-It rejects 27 things correctly and costs 3:
+It rejects 28 things correctly and costs 2:
 
 | label | n | near_player=True |
 | --- | ---: | ---: |
-| racket | 13 | **13** |
+| racket | 14 | **14** |
 | dead_bounce | 9 | **9** |
 | tracking_artifact | 5 | **5** |
-| live_bounce | 12 | 3 |
+| live_bounce | 11 | 2 |
 | ambiguous | 5 | 2 |
 
 (Counts re-measured 2026-09-01 after the labels were re-aligned to post-`aa8f69b`
-detector output; the earlier draft cited 14/10/3 against the stale keying. The
-conclusion is unchanged and slightly stronger: 27 correct rejections, not 26.)
+detector output, then corrected after the shadow experiment showed `f1075` was a
+racket contact, not a ground bounce. The earlier draft cited 14/10/3 against the
+stale keying, then 13/9/5 with 3 live bounces lost before the `f1075` relabel.
+The conclusion is unchanged and stronger: 28 correct rejections, not 26, and
+only 2 real bounces lost.)
 
-The three real bounces it costs are `f1075` (deep near-court bounce), `f2253`
-(near-court bounce, shadow confirms ground) and `f2114` (P4 serve landing).
-`f2114` survives anyway through the serve-landing exemption, so the true loss is
-two.
+The two real bounces it costs are `f2253` (near-court bounce, shadow confirms
+ground) and `f2114` (P4 serve landing). `f2114` survives anyway through the
+serve-landing exemption, so the true rally-scoring loss is one.
 
 ## Why the obvious relaxation fails
 
@@ -61,8 +63,10 @@ should sit at or below them, a racket contact above.
 | racket | -0.579 | [-1.186, -0.407] |
 | live_bounce | +0.613 | [-1.070, 1.616] |
 
-Promising until the two hidden bounces are checked: `f1075` is -0.670 and
-`f2253` is -1.070 — both sit *inside* the racket range.
+Promising until the hidden bounces are checked: `f2253` is -1.070, inside the
+racket range. The other case that originally made this look worse, `f1075`
+(-0.670), was later re-checked and relabelled as a racket contact, so it does
+not support relaxing the veto.
 
 The measure is confounded by depth. Comparing image rows only means something
 when the two objects are at the same distance, and a ball bouncing deep behind a
@@ -74,13 +78,11 @@ become valid by being applied to players instead of the net.
 ## Where the signal actually has to come from
 
 Recovering these needs a *new* observation, not a re-weighting of existing ones.
-The most promising candidate is in the hand label itself: "shadow confirms
-ground". A ball touching the court meets its own shadow; a ball on a racket does
-not. That is a real physical difference, visible in this footage, and unlike
-every measure above it does not depend on knowing depth.
-
-Not attempted here. Recorded because it is the first idea in this area that is
-not another way of rearranging the same three numbers.
+The most promising candidate was in the hand label itself: "shadow confirms
+ground". That has now been checked in `tennis11_ball_shadow_signal.md`. The
+signal is real on the near court, but it is a gap-minimum signal rather than a
+"touching" test, and it does not survive far-court scale. It remains an
+experiment, not a gate.
 
 ## Status
 
