@@ -506,7 +506,15 @@ Ball-track recall is the bottleneck for full automation
   alternating servers inside one game contradicts tennis; that resolution is
   vote-based and abstains on close votes instead of suppressing points on a thin
   margin. A hypothesis report is useful for review, but feeding it straight into
-  scoring would silently invent or merge points.
+  scoring would silently invent or merge points. A suppression-window sweep
+  showed that shortening the 15s window recovers some game2 serves only by
+  admitting spurious game1 hypotheses, so the next lever is point-ended evidence
+  rather than more time-window tuning. The first measured cue, receiver movement
+  before contact, is useful as a live-rally veto but not as positive point-start
+  evidence. See `docs/experiments/tennis11_suppression_window_sweep.md`,
+  `docs/experiments/timeline_point_ended_controls.md`, and
+  `docs/experiments/tennis11_point_ended_signals.md`.
+
 Point-classification fixes (2026-08)
 These do not add bounces; they stop the classifier from inventing verdicts when
 the bounces are missing. With offline bounces and serve motions integrated,
