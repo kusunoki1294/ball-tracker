@@ -18,6 +18,7 @@ CORE_CHECKS = (
     ("serve detection", ("validate_serve_detection.py",)),
     ("court geometry", ("validate_court_geometry.py",)),
     ("bounce labels", ("eval_bounce_detect.py", "--check-labels")),
+    ("association audit", ("validate_association_audit.py",)),
 )
 
 FULL_CHECKS = (
