@@ -11,7 +11,14 @@ def parse_args():
     parser.add_argument("--skip-analysis", action="store_true", help="Render from the existing analysis JSON.")
     parser.add_argument("--skip-audit", action="store_true", help="Skip audit CSV/summary/court-map exports.")
     parser.add_argument("--skip-report", action="store_true", help="Skip static HTML report export.")
-    parser.add_argument("--skip-render", action="store_true", help="Only regenerate the analysis JSON.")
+    parser.add_argument(
+        "--skip-render",
+        action="store_true",
+        help=(
+            "Skip configured video renders. Analysis/audit/report outputs may still be "
+            "rewritten, so existing render files can become stale."
+        ),
+    )
     return parser.parse_args()
 
 
