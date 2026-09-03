@@ -69,6 +69,13 @@ def by_id(items):
     return {item.get("id"): item for item in items if item.get("id")}
 
 
+def detector_value(analysis, bounce, key):
+    value = bounce.get(key)
+    if value is None and analysis.get("bounce_source") == "jsonl":
+        return "not_available_jsonl_bounce_source"
+    return value
+
+
 def point_debug_link(point, debug_dir, output_path):
     if not debug_dir:
         return ""
@@ -143,8 +150,10 @@ def compact_report_data(analysis):
                 "winner_source": point.get("winner_source"),
                 "serve_state": point.get("serve_state"),
                 "serve_confidence": point.get("serve_confidence"),
+                "serve_reasons": point.get("serve_reasons") or [],
                 "point_end_type": point.get("point_end_type"),
                 "point_end_confidence": point.get("point_end_confidence"),
+                "point_end_reasons": point.get("point_end_reasons") or [],
                 "review_flags": point.get("point_review_flags") or [],
                 "shot_ids": point.get("shot_ids") or [],
                 "bounce_ids": point.get("bounce_ids") or [],
@@ -152,6 +161,7 @@ def compact_report_data(analysis):
         )
     return {
         "summary": analysis.get("summary") or {},
+        "bounce_source": analysis.get("bounce_source"),
         "stats": {
             "serve_states": dict(stats["serve_states"]),
             "point_endings": dict(stats["end_types"]),
@@ -188,6 +198,21 @@ def compact_report_data(analysis):
                 "world_point": bounce.get("world_point"),
                 "live": bounce.get("live"),
                 "exclude_reason": bounce.get("exclude_reason"),
+                "detector_confidence": detector_value(
+                    analysis, bounce, "detector_confidence"
+                ),
+                "detector_shape_confidence": detector_value(
+                    analysis, bounce, "detector_shape_confidence"
+                ),
+                "detector_provenance": detector_value(analysis, bounce, "provenance"),
+                "detector_near_player": detector_value(analysis, bounce, "near_player"),
+                "detector_rally_scoring_eligible": detector_value(
+                    analysis, bounce, "rally_scoring_eligible"
+                ),
+                "detector_serve_landing_precondition": detector_value(
+                    analysis, bounce, "serve_landing_precondition"
+                ),
+                "review_reasons": bounce.get("review_reasons") or [],
             }
             for bounce in bounce_lookup.values()
         ],
