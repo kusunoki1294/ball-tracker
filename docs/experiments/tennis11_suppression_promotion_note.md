@@ -2,6 +2,13 @@
 
 Date: 2026-08-31
 
+Status note, 2026-09-03: this note evaluates a rejected promotion rule from the
+earlier 9 accepted / 8 suppressed game-2 state. The current product keeps one
+resolved server for this slice and reports 5 accepted / 12 suppressed contacts,
+with the four verified suppressed serves still visible for review. The decision
+below still stands: do not auto-promote suppressed motions into scoring or point
+truth.
+
 ## Context
 
 Federer's game-2 verification found 4 real serves among 8 suppressed
@@ -52,4 +59,3 @@ The current product behavior is better:
 
 Future work should model these as contested branches or alternate hypotheses,
 not mutate the single accepted sequence in place.
-

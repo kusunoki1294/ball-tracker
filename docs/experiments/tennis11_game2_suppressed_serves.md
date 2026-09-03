@@ -3,6 +3,13 @@
 Date: 2026-08-30
 Author: Federer
 
+Status note, 2026-09-03: this document records the earlier 9 accepted / 8
+suppressed game-2 hypothesis state. The current demo artifact resolves one
+server for the slice and shows 5 accepted / 12 suppressed contacts. Use
+`docs/experiments/tennis11_game2_contact_verification.md` and
+`yoloVids/outputs/tennis11/timeline/timeline_audit.json` for the current label
+interpretation; keep this note as the history of the far-ball heuristic.
+
 ## Question
 
 Game 2 (the 186–330s slice) accepts 9 serve motions and suppresses 8 others as rally

@@ -4,6 +4,13 @@ Date: 2026-08-31
 Author: Federer
 Labels: `labels/tennis11_game2_contact_labels.csv`
 
+Status note, 2026-09-03: the visual labels remain the current source for whether
+each of the 17 contacts is a serve, non-serve, or ambiguous. The accepted /
+suppressed split described early in this document was the state at labelling
+time; the current demo artifact now shows 5 accepted / 12 suppressed contacts
+after single-server resolution. The revised label table below remains the part
+to cite.
+
 ## Scope
 
 All 17 game-2 serve-motion contacts (9 accepted, 8 suppressed), labelled
