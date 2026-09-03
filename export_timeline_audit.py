@@ -47,6 +47,10 @@ def esc(value):
     return html.escape(str(value), quote=True)
 
 
+def serve_motion_hypothesis_count(summary):
+    return summary.get("serve_motion_hypotheses", summary.get("point_hypotheses"))
+
+
 def format_list(values):
     return ", ".join(esc(item) for item in values) if values else "—"
 
@@ -185,7 +189,7 @@ def clip_section(clip):
   <h2>{esc(clip['label'])}</h2>
   <p class='src'>{esc(data.get('source_jsonl') or clip['path'])}</p>
   <div class='stats'>
-    <div><span class='k'>serve-motion hypotheses</span><span class='v'>{esc(summary.get('point_hypotheses'))}</span></div>
+    <div><span class='k'>serve-motion hypotheses</span><span class='v'>{esc(serve_motion_hypothesis_count(summary))}</span></div>
     <div><span class='k'>high confidence</span><span class='v'>{esc(summary.get('high_confidence_hypotheses'))}</span></div>
     <div><span class='k'>uncertain</span><span class='v'>{esc(summary.get('uncertain_hypotheses'))}</span></div>
     <div><span class='k'>serve motions</span><span class='v'>{esc(summary.get('serve_motions'))}</span></div>
@@ -214,7 +218,7 @@ def comparison_section(clips):
         return ""
     header = "".join(f"<th>{esc(clip['label'])}</th>" for clip in clips)
     metrics = [
-        ("serve-motion hypotheses", "point_hypotheses"),
+        ("serve-motion hypotheses", "serve_motion_hypotheses"),
         ("dead-time isolated serve-motion hypotheses", "isolated_point_start_candidates"),
         ("high confidence", "high_confidence_hypotheses"),
         ("uncertain", "uncertain_hypotheses"),
@@ -355,7 +359,7 @@ def main():
     for clip in clips:
         summary = clip["data"].get("summary") or {}
         ground_truth = "verified contacts" if clip["data"].get("contact_evaluation") else "NO ground truth"
-        print(f"  {clip['label']}: {summary.get('point_hypotheses')} serve-motion hypotheses "
+        print(f"  {clip['label']}: {serve_motion_hypothesis_count(summary)} serve-motion hypotheses "
               f"({summary.get('high_confidence_hypotheses')} high), {ground_truth}")
     if args.data_json:
         ensure_parent(args.data_json)

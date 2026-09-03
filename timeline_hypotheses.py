@@ -920,7 +920,7 @@ def print_summary(result):
     print(
         "serve-motion hypotheses: {points}, {motions} serve motions, "
         "{spans} activity spans".format(
-            points=summary["point_hypotheses"],
+            points=summary.get("serve_motion_hypotheses", summary["point_hypotheses"]),
             motions=summary["serve_motions"],
             spans=summary["activity_spans"],
         )

@@ -301,6 +301,7 @@ def validate_outputs(output_dir):
                 errors.append("game 1 f786 must flag stuck-track-dominated return evidence")
     expected = {
         "game 1": {
+            "serve_motion_hypotheses": 6,
             "point_hypotheses": 6,
             "isolated_point_start_candidates": 0,
             "high_confidence_hypotheses": 1,
@@ -311,6 +312,7 @@ def validate_outputs(output_dir):
             "single_server": True,
         },
         "game 2": {
+            "serve_motion_hypotheses": 5,
             "point_hypotheses": 5,
             "isolated_point_start_candidates": 0,
             "high_confidence_hypotheses": 2,
@@ -331,6 +333,7 @@ def validate_outputs(output_dir):
         summary = clip.get("summary") or {}
         hypotheses = clip.get("hypotheses") or []
         for key in (
+            "serve_motion_hypotheses",
             "point_hypotheses",
             "isolated_point_start_candidates",
             "high_confidence_hypotheses",

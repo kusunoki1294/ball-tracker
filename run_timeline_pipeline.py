@@ -280,6 +280,10 @@ def rel_link(path, base_dir):
         return path
 
 
+def serve_motion_hypothesis_count(summary):
+    return summary.get("serve_motion_hypotheses", summary.get("point_hypotheses"))
+
+
 def priority_section(priority_items):
     if not priority_items:
         return ""
@@ -346,7 +350,7 @@ def write_demo_index(
             )
             if (
                 manifest_eval.get("truth_points")
-                and summary.get("point_hypotheses") == manifest_eval.get("truth_points")
+                and serve_motion_hypothesis_count(summary) == manifest_eval.get("truth_points")
                 and evaluation.get("contact_recall") == 1.0
             ):
                 status = "verified contacts"
@@ -397,7 +401,7 @@ def write_demo_index(
         highlights.append(
             "<article>"
             f"<span>{html.escape(label)}</span>"
-            f"<strong>{summary.get('point_hypotheses', '')} serve-motion hypotheses</strong>"
+            f"<strong>{serve_motion_hypothesis_count(summary)} serve-motion hypotheses</strong>"
             f"<em>{html.escape(status)} · {html.escape(server_mode)}</em>"
             "</article>"
         )
@@ -430,7 +434,7 @@ def write_demo_index(
         rows.append(
             "<tr>"
             f"<td>{html.escape(label)}</td>"
-            f"<td>{summary.get('point_hypotheses', '')}</td>"
+            f"<td>{serve_motion_hypothesis_count(summary)}</td>"
             f"<td>{summary.get('distinct_real_observations_pct', '')}%</td>"
             f"<td>{summary.get('isolated_point_start_candidates', '')}</td>"
             f"<td>{summary.get('high_confidence_hypotheses', '')}</td>"

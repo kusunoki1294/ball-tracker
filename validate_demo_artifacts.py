@@ -264,9 +264,9 @@ def validate_timeline(config_path):
         game2 = clips.get("game 2") or {}
         game1_summary = game1.get("summary") or {}
         game2_summary = game2.get("summary") or {}
-        if game1_summary.get("point_hypotheses") != 6:
+        if game1_summary.get("serve_motion_hypotheses") != 6:
             errors.append("game 1 must show 6 serve-motion hypotheses")
-        if game2_summary.get("point_hypotheses") != 5:
+        if game2_summary.get("serve_motion_hypotheses") != 5:
             errors.append("game 2 must show 5 accepted serve-motion hypotheses")
         labels = game2.get("contact_label_evaluation") or {}
         if labels.get("accepted_serve_fraction") != 1.0:
