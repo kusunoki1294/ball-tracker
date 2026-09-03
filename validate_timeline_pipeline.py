@@ -17,6 +17,18 @@ from timeline_hypotheses import resolve_single_server_vote
 
 
 TIMELINE_CONFIG = "timeline_configs/tennis11_games1_2.json"
+SCORING_KEYS = {
+    "winner",
+    "winner_player",
+    "winner_source",
+    "score_after",
+    "point_score_before",
+    "game_score_after",
+    "set_score_after",
+    "games",
+    "sets",
+    "point_frames",
+}
 
 
 def pipeline_python():
@@ -171,6 +183,13 @@ def validate_outputs(output_dir):
         errors.append("timeline audit JSON must carry not_scoring_truth=true")
     if "point_frames" in payload:
         errors.append("timeline audit JSON must not contain point_frames")
+    for path in (
+        os.path.join(output_dir, "game_1_hypotheses.json"),
+        os.path.join(output_dir, "game_2_hypotheses.json"),
+    ):
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as handle:
+                errors.extend(validate_hypothesis_contract(path, json.load(handle)))
     if not os.path.exists(demo_path):
         errors.append("timeline demo HTML was not generated")
     else:
@@ -388,6 +407,47 @@ def validate_outputs(output_dir):
                         errors.append(
                             f"{label}: expected {key}={expected_values[key]}, got {evaluation.get(key)}"
                         )
+    return errors
+
+
+def scoring_key_paths(value, path="$"):
+    hits = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_path = f"{path}.{key}"
+            if key in SCORING_KEYS:
+                hits.append(child_path)
+            hits.extend(scoring_key_paths(child, child_path))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            hits.extend(scoring_key_paths(child, f"{path}[{index}]"))
+    return hits
+
+
+def validate_hypothesis_contract(path, data):
+    errors = []
+    summary = data.get("summary") or {}
+    serve_motion_count = summary.get("serve_motion_hypotheses")
+    compatibility_count = summary.get("point_hypotheses")
+    if serve_motion_count is None:
+        errors.append(f"{path}: summary missing serve_motion_hypotheses")
+    if serve_motion_count != compatibility_count:
+        errors.append(
+            f"{path}: serve_motion_hypotheses={serve_motion_count} does not match "
+            f"point_hypotheses={compatibility_count}"
+        )
+    forbidden = scoring_key_paths(data)
+    if forbidden:
+        errors.append(f"{path}: timeline hypotheses contain scoring keys: {', '.join(forbidden)}")
+    for hypothesis in data.get("hypotheses") or []:
+        label = hypothesis.get("display_id") or hypothesis.get("id")
+        for key in ("start_frame", "end_frame", "start_source", "end_source"):
+            if hypothesis.get(key) is None:
+                errors.append(f"{path} {label}: missing {key}")
+        if hypothesis.get("starts_have_no_truth") is not True:
+            errors.append(f"{path} {label}: missing starts_have_no_truth=true")
+        if hypothesis.get("ends_have_no_truth") is not True:
+            errors.append(f"{path} {label}: missing ends_have_no_truth=true")
     return errors
 
 

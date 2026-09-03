@@ -779,6 +779,7 @@ def build_hypotheses(
                 "boundary_status": status,
                 "reasons": reasons,
                 "review_reasons": review_reasons,
+                "starts_have_no_truth": True,
                 "ends_have_no_truth": True,
                 "serve_count": len(point["attempts"]),
                 "suppressed_rally_motion_count": len(point.get("suppressed_rally_motions", [])),
@@ -810,6 +811,9 @@ def build_hypotheses(
             "suppressed_rally_motions": sum(
                 len(item.get("suppressed_rally_motions", [])) for item in hypotheses
             ),
+            "serve_motion_hypotheses": len(hypotheses),
+            # Compatibility alias for existing consumers. New code should read
+            # serve_motion_hypotheses; these rows are not point truth.
             "point_hypotheses": len(hypotheses),
             "isolated_point_start_candidates": sum(
                 1
