@@ -13,7 +13,7 @@ import time
 import sys
 import tempfile
 
-from timeline_contract import validate_hypothesis_contract
+from timeline_contract import scoring_key_paths, validate_hypothesis_contract
 from timeline_hypotheses import resolve_single_server_vote
 
 
@@ -177,6 +177,11 @@ def validate_outputs(output_dir):
         errors.append("timeline audit JSON must carry not_scoring_truth=true")
     if "point_frames" in payload:
         errors.append("timeline audit JSON must not contain point_frames")
+    forbidden = scoring_key_paths(audit)
+    if forbidden:
+        errors.append(
+            "timeline audit JSON contains scoring keys: " + ", ".join(forbidden)
+        )
     for path in (
         os.path.join(output_dir, "game_1_hypotheses.json"),
         os.path.join(output_dir, "game_2_hypotheses.json"),
