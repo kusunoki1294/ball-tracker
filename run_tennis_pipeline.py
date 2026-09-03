@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import subprocess
 import sys
 
@@ -22,6 +23,37 @@ def load_manifest(path):
 def run_command(command):
     print("+", " ".join(command), flush=True)
     subprocess.run(command, check=True)
+
+
+def stale_render_reason(output, analysis):
+    if not os.path.exists(output):
+        return None
+    if not os.path.exists(analysis):
+        return f"analysis missing: {analysis}"
+    output_mtime = os.path.getmtime(output)
+    analysis_mtime = os.path.getmtime(analysis)
+    if output_mtime < analysis_mtime:
+        return (
+            f"{output} is older than {analysis}; rerun without --skip-render "
+            "before using the video as a product artifact"
+        )
+    return None
+
+
+def warn_stale_renders(jobs):
+    stale = []
+    for job in jobs:
+        output = job.get("output")
+        analysis = job.get("analysis")
+        if not output or not analysis:
+            continue
+        reason = stale_render_reason(output, analysis)
+        if reason:
+            stale.append(reason)
+    if stale:
+        print("WARNING: render outputs are stale:", file=sys.stderr)
+        for reason in stale:
+            print(f"  - {reason}", file=sys.stderr)
 
 
 def render_jobs(manifest):
@@ -108,6 +140,12 @@ def main():
         run_command(command)
 
     if args.skip_render:
+        warn_stale_renders(
+            [
+                {**job, "analysis": job.get("analysis") or analysis_path}
+                for job in render_jobs(manifest)
+            ]
+        )
         return
 
     jobs = render_jobs(manifest)
@@ -132,6 +170,9 @@ def main():
                 output,
             ]
         )
+        reason = stale_render_reason(output, analysis)
+        if reason:
+            raise RuntimeError(f"render freshness check failed: {reason}")
 
 
 if __name__ == "__main__":
