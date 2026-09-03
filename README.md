@@ -484,10 +484,13 @@ Ball-track recall is the bottleneck for full automation
 - The remaining tennis9 labelled bounce misses at f1147 and f1401 are diagnosed
   as tracker association failures, not bounce-detector thresholds. Size
   discontinuity and prediction-distance both help find suspicious associations
-  for review, but neither is a safe rejection rule yet: prediction error at real
-  bounces overlaps the bad associations. See
+  for review, but neither is a safe rejection rule: prediction error at real
+  bounces overlaps the bad associations, and labelled high-error steps include
+  tracker recoveries that a rejection rule would break. The right next artifact
+  is an association audit report, not a tracker-selection change. See
   `docs/experiments/tennis9_bounce_recall_misses.md` and
-  `docs/experiments/tennis9_association_signals.md`.
+  `docs/experiments/tennis9_association_signals.md`, followed by
+  `docs/experiments/tennis9_association_labelled_set.md`.
 - Point timeline automation exists as `timeline_hypotheses.py`, but it is not a
   scoring source. On game 1 it now emits 6 hypotheses for the 6 verified points
   while retaining all 13 serve-like motions for audit; the extra motions are
