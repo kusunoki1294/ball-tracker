@@ -12,6 +12,8 @@ import os
 import sys
 import zipfile
 
+from validate_serve_detection import CONTACT_TOLERANCE_FRAMES, EXPECTED_SERVES
+
 
 DEFAULT_ANALYSIS_MANIFEST = "manifests/tennis11_game1_manifest.json"
 DEFAULT_TIMELINE_CONFIG = "timeline_configs/tennis11_games1_2.json"
@@ -121,6 +123,44 @@ def validate_timeline_hypothesis_contract(errors, data, label):
             errors.append(f"{label} {item_label}: missing ends_have_no_truth=true")
 
 
+def verified_game1_contact_frames():
+    return [frame for frames in EXPECTED_SERVES.values() for frame in frames]
+
+
+def validate_game1_timeline_contacts(errors, data, label):
+    hypotheses = data.get("hypotheses") or []
+    if len(hypotheses) != len(EXPECTED_SERVES):
+        errors.append(
+            f"{label}: expected {len(EXPECTED_SERVES)} accepted serve-motion hypotheses, "
+            f"got {len(hypotheses)}"
+        )
+    detected = [
+        int(attempt["contact_frame"])
+        for hypothesis in hypotheses
+        for attempt in hypothesis.get("attempts") or []
+        if attempt.get("contact_frame") is not None
+    ]
+    unmatched = detected[:]
+    missing = []
+    for expected in verified_game1_contact_frames():
+        match = next(
+            (
+                frame
+                for frame in unmatched
+                if abs(frame - expected) <= CONTACT_TOLERANCE_FRAMES
+            ),
+            None,
+        )
+        if match is None:
+            missing.append(expected)
+        else:
+            unmatched.remove(match)
+    if missing:
+        errors.append(f"{label}: missing verified serve contacts {missing}")
+    if unmatched:
+        errors.append(f"{label}: unexpected accepted serve contacts {unmatched}")
+
+
 def validate_main_analysis(manifest_path):
     errors = []
     manifest = load_json(manifest_path)
@@ -197,11 +237,11 @@ def validate_timeline(config_path):
         stem = label.replace(" ", "_")
         hypothesis = os.path.join(out_dir, f"{stem}_hypotheses.json")
         if check_exists(errors, hypothesis, f"{label} hypotheses JSON"):
-            validate_timeline_hypothesis_contract(
-                errors,
-                load_json(hypothesis),
-                f"{label} hypotheses JSON",
-            )
+            data = load_json(hypothesis)
+            artifact_label = f"{label} hypotheses JSON"
+            validate_timeline_hypothesis_contract(errors, data, artifact_label)
+            if label == "game 1":
+                validate_game1_timeline_contacts(errors, data, artifact_label)
         render = os.path.join(out_dir, clip.get("render_output", ""))
         check_newer(errors, render, hypothesis, f"{label} timeline MP4")
         contact_review = os.path.join(out_dir, clip.get("contact_review_output", ""))
@@ -263,6 +303,8 @@ def validate_timeline(config_path):
                     with archive.open(name) as handle:
                         data = json.loads(handle.read().decode("utf-8"))
                     validate_timeline_hypothesis_contract(errors, data, f"bundle {name}")
+                    if name == "game_1_hypotheses.json":
+                        validate_game1_timeline_contacts(errors, data, f"bundle {name}")
             if "timeline_audit.json" in names:
                 with archive.open("timeline_audit.json") as handle:
                     data = json.loads(handle.read().decode("utf-8"))
