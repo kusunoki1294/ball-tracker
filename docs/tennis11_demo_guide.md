@@ -1,6 +1,6 @@
 # Tennis11 Demo Guide
 
-Date: 2026-08-30
+Date: 2026-09-03
 
 ## Open This First
 
@@ -34,11 +34,11 @@ Good current claim:
   second serve.
 - Game 1 has zero spurious accepted serve-motion hypotheses after suppression.
 - Game 2 is unverified but useful as a harder generalization clip: worse ball
-  observation, 9 accepted serve-motion hypotheses, and 8 suppressed motions.
+  observation, 5 accepted serve-motion hypotheses, and 12 suppressed motions.
 - A source-video label pass says the four suppressed near-side contacts
   (`f623`, `f2517`, `f3506`, `f4183`) are real serves. The far-side non-serve
   reads are lower confidence because the far player is small in frame.
-- The detailed audit reports this as contact-label evidence: 5 of 9 accepted
+- The detailed audit reports this as contact-label evidence: 5 of 5 accepted
   game-2 contacts are labelled serves, and 4 labelled serves are suppressed.
 - The front-page review priorities show both failure classes: verified
   suppressed serves and far-side non-serve controls.
@@ -72,7 +72,7 @@ Do not claim:
   contact metrics.
 - `game1_serve_contact_review.html`: crop strips for all 7 verified game-1
   contacts.
-- `game2_serve_contact_review.html`: crop strips for 9 accepted and 8 suppressed
+- `game2_serve_contact_review.html`: crop strips for 5 accepted and 12 suppressed
   game-2 contacts.
 - `timeline_preroll_review.html`: full-court pre-roll trail cards for f786 plus
   the game-2 suppressed serves and far-side reviewer reads. The trail is drawn
@@ -93,7 +93,11 @@ Do not claim:
 Validation:
 
 ```bash
+.venv/bin/python validate_demo_artifacts.py
 .venv/bin/python validate_timeline_pipeline.py
 .venv/bin/python validate_serve_detection.py
 .venv/bin/python validate_tennis9_regression.py
 ```
+
+Run `validate_demo_artifacts.py` immediately before showing or sending the
+bundle. It checks the files currently on disk, not just temp regenerated output.

@@ -438,12 +438,15 @@ Validate the timeline path:
 
     python validate_timeline_pipeline.py
     .venv/bin/python validate_court_geometry.py
+    .venv/bin/python validate_demo_artifacts.py
 
 This check protects the automation boundary: importing the runner must not load
 the scoring/tracker stacks, the compact audit must carry `not_scoring_truth:
 true`, and no generated JSON may contain `point_frames`. The geometry check
 protects the shared image-to-court projection against drifting from the previous
-OpenCV implementation.
+OpenCV implementation. The demo-artifact smoke check validates the current files
+on disk: report data, fresh review videos, timeline caveats, and the portable
+zip contents.
 
 Render a hypothesis-only overlay video for visual review:
 
