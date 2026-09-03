@@ -82,6 +82,16 @@ REQUIRED_AUDIT_COLUMNS = {
     "point_review_flags",
 }
 
+LEGACY_BOUNCE_EVIDENCE_SENTINEL = "not_available_jsonl_bounce_source"
+DETECTOR_EVIDENCE_COLUMNS = {
+    "detector_confidence",
+    "detector_shape_confidence",
+    "detector_provenance",
+    "detector_near_player",
+    "detector_rally_scoring_eligible",
+    "detector_serve_landing_precondition",
+}
+
 EXPECTED_MISSED_BOUNCE_CANDIDATES = []
 
 EXPECTED_SHOT_TYPES = {
@@ -181,13 +191,29 @@ def validate_points(analysis):
 
 
 def validate_audit_csv(path):
+    errors = []
     with open(path, "r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
         columns = set(reader.fieldnames or [])
+        rows = list(reader)
     missing = sorted(REQUIRED_AUDIT_COLUMNS - columns)
     if missing:
-        return [f"audit CSV missing columns: {', '.join(missing)}"]
-    return []
+        errors.append(f"audit CSV missing columns: {', '.join(missing)}")
+    missing_detector = sorted(DETECTOR_EVIDENCE_COLUMNS - columns)
+    if missing_detector:
+        errors.append(f"audit CSV missing detector evidence columns: {', '.join(missing_detector)}")
+        return errors
+    if not rows:
+        errors.append("audit CSV has no bounce rows")
+        return errors
+    for row in rows:
+        for column in DETECTOR_EVIDENCE_COLUMNS:
+            if row.get(column) != LEGACY_BOUNCE_EVIDENCE_SENTINEL:
+                errors.append(
+                    f"audit CSV {row.get('bounce_id')} {column}: expected "
+                    f"{LEGACY_BOUNCE_EVIDENCE_SENTINEL!r}, got {row.get(column)!r}"
+                )
+    return errors
 
 
 def validate_point_debug_images(directory):
@@ -220,11 +246,22 @@ def validate_report_data(path):
         return [f"missing match report data: {path}"]
     payload = load_json(path)
     errors = []
+    check_equal(errors, "report data bounce_source", payload.get("bounce_source"), "jsonl")
     check_equal(errors, "report data final_game_score", (payload.get("summary") or {}).get("final_game_score"), "0-1")
     check_equal(errors, "report data point count", len(payload.get("points") or []), len(EXPECTED_POINTS))
     for key in ["serve_states", "point_endings", "points_won", "trusted_stroke_sides"]:
         if key not in (payload.get("stats") or {}):
             errors.append(f"report data missing stats.{key}")
+    bounces = payload.get("bounces") or []
+    if not bounces:
+        errors.append("report data has no bounces")
+    for bounce in bounces:
+        for key in DETECTOR_EVIDENCE_COLUMNS:
+            if bounce.get(key) != LEGACY_BOUNCE_EVIDENCE_SENTINEL:
+                errors.append(
+                    f"report data {bounce.get('id')} {key}: expected "
+                    f"{LEGACY_BOUNCE_EVIDENCE_SENTINEL!r}, got {bounce.get(key)!r}"
+                )
     return errors
 
 
