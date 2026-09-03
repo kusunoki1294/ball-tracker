@@ -25,8 +25,10 @@ def run_command(command):
     subprocess.run(command, check=True)
 
 
-def stale_render_reason(output, analysis):
+def render_staleness_message(output, analysis, missing_is_stale=False):
     if not os.path.exists(output):
+        if missing_is_stale:
+            return f"{output} was not written"
         return None
     if not os.path.exists(analysis):
         return f"analysis missing: {analysis}"
@@ -47,7 +49,7 @@ def warn_stale_renders(jobs):
         analysis = job.get("analysis")
         if not output or not analysis:
             continue
-        reason = stale_render_reason(output, analysis)
+        reason = render_staleness_message(output, analysis)
         if reason:
             stale.append(reason)
     if stale:
@@ -170,7 +172,7 @@ def main():
                 output,
             ]
         )
-        reason = stale_render_reason(output, analysis)
+        reason = render_staleness_message(output, analysis, missing_is_stale=True)
         if reason:
             raise RuntimeError(f"render freshness check failed: {reason}")
 
