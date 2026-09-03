@@ -36,3 +36,8 @@ What it establishes, as of 2026-09-01:
 
 Regenerate the detections with `eval_bounce_detect.py --review-csv`; the `label`
 and `note` columns are hand-added and are not reproducible from code.
+
+When editing a label CSV, re-derive any quoted counts in this README and in any
+`docs/experiments/` file that cites the labels in the same commit. The label
+frames are guarded by `eval_bounce_detect.py --check-labels`; prose summaries are
+not, so stale counts have to be caught by review discipline.
