@@ -82,3 +82,49 @@ All of the following, together:
 - no new g2 false positives against `labels/tennis11_game2_contact_labels.csv`
 
 Anything short of this is not an improvement on the 15s window it would replace.
+
+## Addendum, 2026-09-04: what the receiver-motion attempt taught
+
+The first candidate signal — receiver travel in the second before contact — was
+retracted. It turned out to be a detector-swap proxy rather than a measure of
+player motion. Four things from that attempt are worth carrying forward,
+because none of them are specific to that signal.
+
+**A margin measured on selected controls is not a margin.** Receiver travel
+showed an ~85x gap on the eight controls in this document. Measured against the
+full labelled candidate set it was far tighter, and partly overlapping:
+
+| population | serves | non-serves |
+| --- | --- | --- |
+| eight controls | 0.14 - 0.44 | 40 - 66 (game-1 overheads) |
+| full labelled game-2 candidates | 0.14 - 0.44 | 0.09 - 1.74 (overlaps) |
+| after the single-server invariant | 0.14 - 0.44 | 1.14 - 1.41 |
+
+The real operating margin was 2.6x, not 85x, and two non-serves sat inside the
+serve band. Evaluate any future candidate against the labelled population from
+the start; the controls here are necessary, not sufficient. This has now cost
+two attempts — reach prominence separated game 2 cleanly and broke on game 1's
+overhead (`tennis11_suppression_window_sweep.md`), then this.
+
+**The receiver is the opposite of the CLAIMED server, not a fixed side.**
+Measuring `player_far` for every candidate is wrong for far-server candidates
+and inverts the conclusion. This error was made and caught during review.
+
+**Side-dependent signals must run after server resolution.** The far-server
+non-serves scored 0.09 and 0.25, squarely inside the serve range — this signal
+could not separate them at all. They were harmless only because the
+single-server invariant removed them first. Any signal keyed on server or
+receiver inherits that dependency, and if the invariant is disabled for a
+multi-game clip the signal silently loses its guarantee.
+
+**Gating second-serve grouping was arithmetic, not preference.** f1659 scored
+5.15, above every rally shot the veto needed to catch (1.14 - 1.41). No single
+threshold both suppressed game-2's rally shots and preserved the double fault.
+The warning at the top of this document is load-bearing.
+
+**A diagnostic tell.** Two implementations of the metric agreed to 0.02 on point
+starts and diverged widely on rally frames (52.46/39.69/66.10 against
+42.41/36.09/80.35). That asymmetry was the artefact showing through: the class
+that disagreed was the class not measuring what it claimed. When two honest
+implementations disagree on one class of case and agree on another, suspect the
+disagreeing class before suspecting the implementations.
