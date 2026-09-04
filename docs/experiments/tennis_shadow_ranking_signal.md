@@ -52,6 +52,39 @@ All 44 hand-labelled tennis11 game-1 cases:
 A ranking input that declines on 41% of near-court cases cannot rank. It already
 abstains on `f1455`, one of the four frames in the pair it was built for.
 
+## Far court does not abstain — it resolves, confidently and wrongly
+
+The abstain rates look backwards: 20% far court against 41% near. An earlier doc
+concluded far court has nothing to measure, so it should abstain *more*. Both
+cannot be true.
+
+Inspecting the 8 resolved far-court cases settles it:
+
+| frame | ball | gap | blob | blob/ball area | label |
+| --- | ---: | ---: | ---: | ---: | --- |
+| f186 | 11 px | 0.62 | 27 | 0.29 | live_bounce |
+| f345 | 11 px | 0.33 | 22 | 0.23 | **racket** |
+| f1013 | 10 px | 0.43 | 14 | 0.18 | ambiguous |
+| f1104 | 11 px | 0.38 | 10 | 0.11 | ambiguous |
+| f1511 | 8 px | 1.84 | 18 | 0.36 | live_bounce |
+| f2114 | 11 px | 0.66 | 52 | 0.55 | live_bounce |
+| f2976 | 10 px | 0.40 | 14 | 0.18 | live_bounce |
+| f3166 | 10 px | 2.12 | 121 | 1.55 | **tracking_artifact** |
+
+Gaps cluster at 0.33–0.66, *tighter and smaller* than any genuine near-court
+bounce (1.18–1.43). A gap of 0.33 ball diameters means the "shadow" is sitting on
+top of the ball — that is the detector latching onto the ball's own dark edge, a
+court line, or net shadow, not a separated ground shadow. A real shadow under an
+8–11 px ball would be a few pixels and not separable at all.
+
+**This is worse than missing information.** Under any threshold calibrated on the
+near-court pair, every far-court case reads as a ground contact — including the
+racket contact at `f345` and the tracking artifact at `f3166`. The signal is not
+silent there; it is confidently wrong in a single direction.
+
+Hence the constraint below is a hard not-applicable by court region, not a
+softer "absence must not penalise".
+
 ## The threshold was tuned in the signal's own favour
 
 The first implementation used 18% of local median as the darkness threshold and
@@ -74,8 +107,9 @@ If it is ever revisited, the constraints from review stand:
 - a **separate shadow field only** — it must not feed `detector_confidence` or
   `detector_shape_confidence`
 - no shadow means **not applicable / abstain**, never weak evidence
-- **far-court absence must not penalise a bounce**; the signal has no information
-  there
+- **hard not-applicable by court region.** Far court must be excluded by region,
+  not merely un-penalised: it resolves on lines and net shadow at gaps smaller
+  than genuine bounces, so it reads every far-court event as a ground contact
 - **net-line contacts remain governed by `NET_LINE_CONTACT_BAND_FT` geometry**;
   shadow must not reclassify them
 
