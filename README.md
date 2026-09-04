@@ -510,10 +510,13 @@ Ball-track recall is the bottleneck for full automation
   showed that shortening the 15s window recovers some game2 serves only by
   admitting spurious game1 hypotheses, so the next lever is point-ended evidence
   rather than more time-window tuning. The first measured cue, receiver movement
-  before contact, is useful as a live-rally veto but not as positive point-start
-  evidence. See `docs/experiments/tennis11_suppression_window_sweep.md`,
-  `docs/experiments/timeline_point_ended_controls.md`, and
-  `docs/experiments/tennis11_point_ended_signals.md`.
+  before contact, was retracted after a player-box stability audit showed it was
+  mostly measuring detector swaps, not human movement. Swap-heavy windows are
+  abstention evidence, not proof that a rally is live. See
+  `docs/experiments/tennis11_suppression_window_sweep.md`,
+  `docs/experiments/timeline_point_ended_controls.md`,
+  `docs/experiments/tennis11_point_ended_signals.md`, and
+  `docs/experiments/tennis11_player_box_stability.md`.
 
 Point-classification fixes (2026-08)
 These do not add bounces; they stop the classifier from inventing verdicts when
