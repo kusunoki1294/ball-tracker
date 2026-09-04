@@ -53,7 +53,8 @@ fails if the sample size is removed from the report.
 ## Guarantees
 
 `validate_player_box_audit.py` (in the default `validate_project.py` suite)
-checks that the far player's swap count exceeds the near player's in game 1,
-that no row asserts a verdict, that the caveat survives, and that the population
-sample size is stated. All three contract checks are mutation-tested. The
+checks that no row asserts a verdict, that the caveat survives, and that the
+population sample size is stated. Those contract checks are mutation-tested. It
+prints the current game-1 far-vs-near swap asymmetry as an observation, but does
+not fail on it; improved tracking could legitimately change that count. The
 exporter reads tracking JSONL only and influences no detector.
