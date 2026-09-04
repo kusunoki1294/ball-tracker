@@ -25,8 +25,10 @@ def pipeline_python():
     return venv_python if os.path.exists(venv_python) else sys.executable
 
 
-def run(command):
-    return subprocess.run(command, check=True, text=True, capture_output=True)
+def run(command, capture=True):
+    if capture:
+        return subprocess.run(command, check=True, text=True, capture_output=True)
+    return subprocess.run(command, check=True, text=True)
 
 
 def validate_import_boundary():
@@ -141,6 +143,7 @@ def validate_stale_video_guard(output_dir):
         stale_probe_dir,
         "--bundle-demo",
     ]
+    print("checking stale review-video bundle guard...", flush=True)
     completed = subprocess.run(command, check=False, text=True, capture_output=True)
     if completed.returncode == 0:
         errors.append("bundling must fail when a configured review MP4 is stale")
@@ -156,6 +159,7 @@ def validate_outputs(output_dir):
     for legacy_name in ("game1_hypotheses.json", "game2_hypotheses.json"):
         with open(os.path.join(output_dir, legacy_name), "w", encoding="utf-8") as handle:
             json.dump({"stale": True}, handle)
+    print("regenerating timeline pipeline outputs...", flush=True)
     run(
         [
             pipeline_python(),
@@ -164,7 +168,8 @@ def validate_outputs(output_dir):
             TIMELINE_CONFIG,
             "--out-dir",
             output_dir,
-        ]
+        ],
+        capture=False,
     )
     audit_path = os.path.join(output_dir, "timeline_audit.json")
     demo_path = os.path.join(output_dir, "timeline_demo.html")
