@@ -1,5 +1,14 @@
 # Point-Ended Evidence: What Separates A Live Rally From A Serve About To Happen
 
+> **RETRACTED 2026-09-04.** The receiver-travel result below does not hold. A
+> player-box stability audit showed the metric is ~99% a detector-swap counter:
+> median per-frame receiver movement is identical between rally and serve windows
+> (0.006 vs 0.006), and the separation came from the three controls happening to
+> sit in swap-heavy windows. Neither a confidence-filtered version nor mean
+> detection confidence generalises. Do not implement the veto described here.
+> See `tennis11_player_box_stability.md`. The sections on signals that do NOT
+> separate remain valid.
+
 Date: 2026-09-03
 Author: Federer
 Experiment only. No promotion rule built, no threshold changed.
