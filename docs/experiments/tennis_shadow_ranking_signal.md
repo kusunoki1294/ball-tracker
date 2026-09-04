@@ -79,6 +79,31 @@ If it is ever revisited, the constraints from review stand:
 - **net-line contacts remain governed by `NET_LINE_CONTACT_BAND_FT` geometry**;
   shadow must not reclassify them
 
+## "Ranking only" is not automatically safe
+
+Raised in review: NMS survivor selection happens inside the 10–45 frame serve
+flight window, so a shadow-driven re-rank could change which candidate becomes a
+serve landing — and therefore change an in/fault verdict. Any such change would
+require re-verifying `f186` in, `f1511` fault, `f2114` fault, `f2976` in, plus
+the net-line rejections.
+
+Measured, because the scope matters:
+
+| landing | verdict | rivals within the 18-frame window |
+| --- | --- | ---: |
+| f186 | in | 0 |
+| f1511 | fault | 0 |
+| f2114 | fault | 0 |
+| f2976 | in | **1** (f2974, medium, score 2.20, ranks below today) |
+
+So the principle is right and the current exposure is **one landing with one
+rival**, not four. Three of the four serve landings are uncontested inside the
+suppression window and no re-ranking could displace them on this clip.
+
+That is still enough to make the point: a change sold as "ranking only" reaches
+serve adjudication, so it needs the landing verdicts re-verified rather than
+assumed. It is simply a narrower re-verification than four.
+
 ## Why this is recorded rather than dropped
 
 This is the third signal measured and rejected for the bounce problem, after the
