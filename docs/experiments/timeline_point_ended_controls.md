@@ -101,10 +101,16 @@ full labelled candidate set it was far tighter, and partly overlapping:
 | after the single-server invariant | 0.14 - 0.44 | 1.14 - 1.41 |
 
 The real operating margin was 2.6x, not 85x, and two non-serves sat inside the
-serve band. Evaluate any future candidate against the labelled population from
-the start; the controls here are necessary, not sufficient. This has now cost
-two attempts — reach prominence separated game 2 cleanly and broke on game 1's
-overhead (`tennis11_suppression_window_sweep.md`), then this.
+serve band. A separation measured on these controls is **provisional** until it
+is tested against both the labelled candidate population and a random sample of
+non-serve frames. The two tests catch different faults: the labelled set finds
+overlap with the cases that actually reach the rule, while random sampling finds
+signals that look discriminating only because serve moments are rare — that is
+how the same attempt was shown to work as a veto but not as a promoter, with 49%
+of random non-serve frames also reading as still. The controls in this document
+are necessary, not sufficient. This has now cost two attempts — reach prominence
+separated game 2 cleanly and broke on game 1's overhead
+(`tennis11_suppression_window_sweep.md`), then this.
 
 **The receiver is the opposite of the CLAIMED server, not a fixed side.**
 Measuring `player_far` for every candidate is wrong for far-server candidates
