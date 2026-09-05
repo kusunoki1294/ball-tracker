@@ -562,6 +562,18 @@ def stale_render_reason(video_path, hypothesis_path):
     return None
 
 
+def stale_video_refusal_message(stale):
+    detail = "; ".join(
+        f"{label}: {path} is older than its hypotheses JSON" for label, path, _ in stale
+    )
+    return (
+        f"refusing to bundle: {len(stale)} review MP4(s) describe a state the "
+        f"hypotheses JSON no longer matches ({detail}). Video rendering is opt-in, "
+        f"so a run without --render-videos leaves the old video beside fresh pages. "
+        f"Re-run with --render-videos, or pass --allow-stale-videos to bundle anyway."
+    )
+
+
 def write_demo_bundle(
     path,
     demo_index,
@@ -941,15 +953,7 @@ def main():
                 file=sys.stderr,
             )
         if stale:
-            detail = "; ".join(
-                f"{label}: {path} is older than its hypotheses JSON" for label, path, _ in stale
-            )
-            message = (
-                f"refusing to bundle: {len(stale)} review MP4(s) describe a state the "
-                f"hypotheses JSON no longer matches ({detail}). Video rendering is opt-in, "
-                f"so a run without --render-videos leaves the old video beside fresh pages. "
-                f"Re-run with --render-videos, or pass --allow-stale-videos to bundle anyway."
-            )
+            message = stale_video_refusal_message(stale)
             if not args.allow_stale_videos:
                 print(f"ERROR: {message}", file=sys.stderr)
                 raise SystemExit(3)

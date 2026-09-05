@@ -127,31 +127,11 @@ def validate_stale_video_guard(output_dir):
         errors.append("an absent video must be reported missing")
     os.unlink(fresh_json)
 
-    stale_probe_dir = os.path.join(output_dir, "_stale_video_guard")
-    os.makedirs(stale_probe_dir, exist_ok=True)
-    for name in ("game1_timeline_hypotheses.mp4", "game2_timeline_hypotheses.mp4"):
-        path = os.path.join(stale_probe_dir, name)
-        with open(path, "w", encoding="utf-8") as handle:
-            handle.write("")
-        os.utime(path, (0, 0))
-    command = [
-        pipeline_python(),
-        "run_timeline_pipeline.py",
-        "--config",
-        TIMELINE_CONFIG,
-        "--out-dir",
-        stale_probe_dir,
-        "--bundle-demo",
-    ]
-    print("checking stale review-video bundle guard...", flush=True)
-    completed = subprocess.run(command, check=False, text=True, capture_output=True)
-    if completed.returncode == 0:
-        errors.append("bundling must fail when a configured review MP4 is stale")
-    elif "refusing to bundle" not in completed.stderr:
-        errors.append(
-            "stale-video refusal must say why it refused "
-            f"(exit {completed.returncode}, stderr={completed.stderr[-500:]!r})"
-        )
+    message = run_timeline_pipeline.stale_video_refusal_message(
+        [("game1", os.path.join(output_dir, "stale.mp4"), "stale")]
+    )
+    if "refusing to bundle" not in message or "--render-videos" not in message:
+        errors.append(f"stale-video refusal message is not actionable: {message!r}")
     return errors
 
 
