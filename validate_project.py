@@ -14,6 +14,7 @@ import time
 
 CORE_CHECKS = (
     ("demo artifacts", ("validate_demo_artifacts.py",)),
+    ("tennis pipeline runner", ("validate_tennis_pipeline_runner.py",)),
     ("tennis9 regression", ("validate_tennis9_regression.py",)),
     ("serve detection", ("validate_serve_detection.py",)),
     ("court geometry", ("validate_court_geometry.py",)),
