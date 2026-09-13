@@ -59,9 +59,10 @@ reversals, which is the same result measured in
 `tennis11_near_player_veto.md`: shape says a reversal happened, never what it
 bounced off.
 
-This is a concrete case where the shadow signal would decide it. `f1445` sits
-beside its shadow, `f1456` is at racket height with the shadow well below. Both
-are near-court, which is exactly where
-`tennis11_ball_shadow_signal.md` measured the signal to work. That is now two
-independent problems — the near-player veto and this suppression ranking — that
-the same unbuilt signal would address.
+This was the concrete case that made the shadow signal tempting: `f1445` sits
+beside its shadow, while `f1456` is at racket height with the shadow well below.
+That pair separates cleanly. The follow-up population check did not: across the
+44 labelled tennis11 cases, live-bounce and racket-contact shadow gaps overlap,
+near-court abstention is high, and far-court cases resolve confidently on the
+wrong blobs. So shadow remains a rejected signal, not a fix for this suppression
+failure. See `docs/experiments/tennis_shadow_ranking_signal.md`.

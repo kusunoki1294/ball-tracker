@@ -488,12 +488,14 @@ Ball-track recall is the bottleneck for full automation
   bounces overlaps the bad associations, and labelled high-error steps include
   tracker recoveries that a rejection rule would break. `f1446` is different:
   the detector finds the bounce, but non-maximum suppression keeps a nearby
-  racket contact instead. That points to near-court shadow evidence as an audit
-  signal, not another global threshold tweak. See
+  racket contact instead. Shadow evidence separates that hand-picked pair, but
+  failed against the labelled population and must not be built as a ranking or
+  gating signal without new labelled near-court ground-contact data. See
   `docs/experiments/tennis9_bounce_recall_misses.md`,
   `docs/experiments/tennis9_association_signals.md`,
   `docs/experiments/tennis9_association_labelled_set.md`, and
-  `docs/experiments/tennis9_f1446_suppression.md`.
+  `docs/experiments/tennis9_f1446_suppression.md`; the rejected shadow result is
+  recorded in `docs/experiments/tennis_shadow_ranking_signal.md`.
 - Point timeline automation exists as `timeline_hypotheses.py`, but it is not a
   scoring source. On game 1 it now emits 6 hypotheses for the 6 verified points
   while retaining all 13 serve-like motions for audit; the extra motions are
