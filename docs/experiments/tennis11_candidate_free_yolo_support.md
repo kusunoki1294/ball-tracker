@@ -29,6 +29,14 @@ Command:
 - Therefore no candidate-free reversal is promoted into the production bounce
   list from this experiment.
 
+### High-resolution follow-up
+
+The same windows were rerun with confidence `0.03` and image size `1920`.
+Moving-track support changed from `28/30` to `30/30`, adding support at f2158
+and f2298 only. It did not provide an independent bounce discriminator, so the
+higher-resolution result is also review-only and does not justify a production
+retrack or threshold change by itself.
+
 ## Conclusion
 
 The existing YOLO model can provide review evidence, but moving-object support
