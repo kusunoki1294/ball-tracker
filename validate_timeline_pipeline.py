@@ -105,6 +105,7 @@ def validate_stale_video_guard(output_dir):
     Video rendering is opt-in behind --render-videos while pages regenerate every
     run, so without this guard a plain --bundle-demo ships fresh HTML beside a
     video burned with older hypothesis text.
+    This covers the decision only; that main() consults it is not verified here.
     """
     import run_timeline_pipeline
 
