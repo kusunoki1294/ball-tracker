@@ -1,9 +1,11 @@
 import argparse
 import json
 import os
+import subprocess
 from collections import deque
 
 import cv2
+import numpy as np
 
 
 SCORE_COLOR = (255, 255, 255)
@@ -29,6 +31,87 @@ CANDIDATE_COLORS = {
 TEXT_SHADOW = (0, 0, 0)
 
 
+class FFmpegCapture:
+    """Sequential VideoCapture-compatible reader for codecs OpenCV cannot open."""
+
+    def __init__(self, path):
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height,r_frame_rate", "-of", "json", path],
+            check=True, capture_output=True, text=True,
+        )
+        stream = json.loads(probe.stdout)["streams"][0]
+        self.width = int(stream["width"])
+        self.height = int(stream["height"])
+        numerator, denominator = (int(value) for value in stream["r_frame_rate"].split("/"))
+        self.fps = numerator / denominator
+        self.frame_size = self.width * self.height * 3
+        self.process = subprocess.Popen(
+            ["ffmpeg", "-loglevel", "error", "-i", path,
+             "-f", "rawvideo", "-pix_fmt", "bgr24", "-"],
+            stdout=subprocess.PIPE,
+        )
+
+    def isOpened(self):
+        return self.process.poll() is None
+
+    def get(self, property_id):
+        if property_id == cv2.CAP_PROP_FRAME_WIDTH:
+            return self.width
+        if property_id == cv2.CAP_PROP_FRAME_HEIGHT:
+            return self.height
+        if property_id == cv2.CAP_PROP_FPS:
+            return self.fps
+        return 0.0
+
+    def read(self):
+        data = self.process.stdout.read(self.frame_size)
+        if len(data) != self.frame_size:
+            return False, None
+        return True, np.frombuffer(data, dtype=np.uint8).reshape(
+            (self.height, self.width, 3)
+        ).copy()
+
+    def release(self):
+        if self.process.stdout and not self.process.stdout.closed:
+            self.process.stdout.close()
+        if self.process.poll() is None:
+            self.process.terminate()
+        self.process.wait()
+
+
+class FFmpegWriter:
+    """Raw BGR writer that avoids unreliable platform movie backends."""
+
+    def __init__(self, path, width, height, fps):
+        self.process = subprocess.Popen(
+            ["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo",
+             "-pix_fmt", "bgr24", "-s", f"{width}x{height}", "-r", str(fps),
+             "-i", "-", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", path],
+            stdin=subprocess.PIPE,
+        )
+
+    def isOpened(self):
+        return self.process.poll() is None
+
+    def write(self, frame):
+        self.process.stdin.write(frame.tobytes())
+
+    def release(self):
+        if self.process.stdin and not self.process.stdin.closed:
+            self.process.stdin.close()
+        self.process.wait()
+
+
+def open_capture(path):
+    capture = cv2.VideoCapture(path)
+    if capture.isOpened():
+        return capture
+    capture.release()
+    print(f"OpenCV could not decode {path}; using FFmpeg fallback.")
+    return FFmpegCapture(path)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Render tennis event analysis overlays onto an annotated video.")
     parser.add_argument("--video", required=True, help="Input video, typically ai9.3.avi.")
@@ -52,6 +135,13 @@ def load_analysis(path):
 
 def open_writer(path, width, height, fps):
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    try:
+        writer = FFmpegWriter(path, width, height, fps)
+        if writer.isOpened():
+            return writer
+        writer.release()
+    except (OSError, subprocess.SubprocessError):
+        pass
     for codec in ("MJPG", "mp4v", "avc1"):
         fourcc = cv2.VideoWriter_fourcc(*codec)
         writer = cv2.VideoWriter(path, fourcc, fps, (width, height))
@@ -274,7 +364,7 @@ def main():
             )
 
     points = analysis.get("points", [])
-    cap = cv2.VideoCapture(args.video)
+    cap = open_capture(args.video)
     if not cap.isOpened():
         raise RuntimeError(f"Could not open video: {args.video}")
 

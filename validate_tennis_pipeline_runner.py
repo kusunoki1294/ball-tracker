@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import tempfile
+from unittest import mock
 
 import run_tennis_pipeline
 
@@ -18,6 +19,24 @@ def touch(path, mtime):
 
 def main():
     errors = []
+    with mock.patch.object(
+        run_tennis_pipeline,
+        "video_frame_count",
+        side_effect=lambda path: {"input.mp4": 10, "output.mp4": 10}.get(path),
+    ):
+        if run_tennis_pipeline.render_media_message("output.mp4", "input.mp4") is not None:
+            errors.append("equal render/input frame counts must pass")
+        run_tennis_pipeline.video_frame_count.side_effect = lambda path: {
+            "input.mp4": 10, "output.mp4": 9
+        }.get(path)
+        mismatch = run_tennis_pipeline.render_media_message("output.mp4", "input.mp4")
+        if not mismatch or "9 decoded frames" not in mismatch or "10" not in mismatch:
+            errors.append(f"frame-count mismatch is not actionable: {mismatch!r}")
+        run_tennis_pipeline.video_frame_count.side_effect = lambda path: None
+        unavailable = run_tennis_pipeline.render_media_message("output.mp4", "input.mp4")
+        if not unavailable or "could not verify decoded frame counts" not in unavailable:
+            errors.append(f"unprobeable media must be reported: {unavailable!r}")
+
     with tempfile.TemporaryDirectory() as tmp:
         analysis = os.path.join(tmp, "analysis.json")
         render = os.path.join(tmp, "render.mp4")

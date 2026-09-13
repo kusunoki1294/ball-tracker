@@ -4,6 +4,7 @@ import json
 import math
 import os
 import statistics
+import subprocess
 from collections import deque
 
 import cv2
@@ -29,6 +30,76 @@ PLAYER_FAR_COLOR = (0, 200, 255)
 GENERIC_COLOR = (0, 255, 0)
 BOUNCE_COLOR = (0, 0, 255)
 HIT_COLOR = (255, 0, 255)
+
+
+class FFmpegVideoCapture:
+    """Small sequential VideoCapture-compatible reader for codec fallbacks."""
+
+    def __init__(self, path):
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height,r_frame_rate",
+             "-of", "json", path],
+            check=True, capture_output=True, text=True,
+        )
+        stream = json.loads(probe.stdout)["streams"][0]
+        self.width = int(stream["width"])
+        self.height = int(stream["height"])
+        numerator, denominator = (int(value) for value in stream["r_frame_rate"].split("/"))
+        self.fps = numerator / denominator
+        self.frame_size = self.width * self.height * 3
+        self.skip_frames = 0
+        self.process = subprocess.Popen(
+            ["ffmpeg", "-loglevel", "error", "-i", path,
+             "-f", "rawvideo", "-pix_fmt", "bgr24", "-"],
+            stdout=subprocess.PIPE,
+        )
+
+    def isOpened(self):
+        return self.process.poll() is None
+
+    def get(self, property_id):
+        if property_id == cv2.CAP_PROP_FRAME_WIDTH:
+            return self.width
+        if property_id == cv2.CAP_PROP_FRAME_HEIGHT:
+            return self.height
+        if property_id == cv2.CAP_PROP_FPS:
+            return self.fps
+        return 0.0
+
+    def set(self, property_id, value):
+        if property_id == cv2.CAP_PROP_POS_FRAMES:
+            self.skip_frames = max(0, int(value))
+            return True
+        return False
+
+    def read(self):
+        while self.skip_frames:
+            if len(self.process.stdout.read(self.frame_size)) != self.frame_size:
+                return False, None
+            self.skip_frames -= 1
+        data = self.process.stdout.read(self.frame_size)
+        if len(data) != self.frame_size:
+            return False, None
+        return True, np.frombuffer(data, dtype=np.uint8).reshape(
+            (self.height, self.width, 3)
+        ).copy()
+
+    def release(self):
+        if self.process.stdout and not self.process.stdout.closed:
+            self.process.stdout.close()
+        if self.process.poll() is None:
+            self.process.terminate()
+        self.process.wait()
+
+
+def open_video_capture(path):
+    capture = cv2.VideoCapture(path)
+    if capture.isOpened():
+        return capture
+    capture.release()
+    print(f"OpenCV could not decode {path}; using FFmpeg fallback.")
+    return FFmpegVideoCapture(path)
 
 
 class SimpleTracker:
@@ -2380,7 +2451,7 @@ def main():
     ball_model = load_model(args.ball_model)
     scene_model = load_model(args.scene_model)
 
-    cap = cv2.VideoCapture(args.video)
+    cap = open_video_capture(args.video)
     if not cap.isOpened():
         raise RuntimeError(f"Could not open video: {args.video}")
     if args.start_frame > 0:

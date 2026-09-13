@@ -23,6 +23,7 @@ CORE_CHECKS = (
     ("association audit", ("validate_association_audit.py",)),
     ("player box audit", ("validate_player_box_audit.py",)),
     ("render marker contract", ("validate_render_marker_contract.py",)),
+    ("render backend", ("validate_render_backend.py",)),
 )
 
 FULL_CHECKS = (

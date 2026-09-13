@@ -371,6 +371,47 @@ Two things it deliberately does NOT do:
   dead balls on that clip, while serve adjudication uses its own contact-anchored
   landing logic.
 
+Track-reversal review (2026-09):
+- `export_track_reversal_review.py` creates a detector-independent inventory of
+  vertical direction reversals from an observed ball track.
+- `export_yolo_reversal_support.py` measures whether a short FFmpeg-streamed
+  YOLO window contains a persistent moving detection for each candidate.
+- `render_track_reversal_review.py` renders those events into a full-clip video
+  for visual review.
+
+These tools are explicitly review-only. A reversal or a moving YOLO detection
+may be a bounce, racket contact, toss, dead-ball handling, or a wrong
+association. Their JSON summaries set `not_bounce_truth: true`; they must not
+be fed into scoring or appended to the normal bounce list without source-video
+labels and a precision check.
+
+Example:
+
+    .venv/bin/python export_track_reversal_review.py \
+      --jsonl yoloVids/outputs/tennis11/ai11.1.jsonl \
+      --bounce-json yoloVids/outputs/tennis11/ai11.2.analysis.json \
+      --output-csv yoloVids/outputs/tennis11/track_reversal_review.csv \
+      --summary-json yoloVids/outputs/tennis11/track_reversal_review.summary.json
+
+    .venv/bin/python render_track_reversal_review.py \
+      --video yoloVids/inputs/tennis11_game1.mp4 \
+      --reviews yoloVids/outputs/tennis11/track_reversal_review.csv \
+      --output yoloVids/outputs/tennis11/track_reversal_review.mp4
+
+    # Optional combined audit: existing detector candidates plus candidate-free
+    # reversal events, with the two evidence sources kept visually distinct.
+    .venv/bin/python render_track_reversal_review.py \
+      --video yoloVids/inputs/tennis11_game1.mp4 \
+      --reviews yoloVids/outputs/tennis11/track_reversal_review.csv \
+      --support-json yoloVids/outputs/tennis11/yolo_reversal_support.json \
+      --analysis yoloVids/outputs/tennis11/ai11.2.analysis.json \
+      --output yoloVids/outputs/tennis11/tennis11_game1_bounce_audit.mp4
+
+    .venv/bin/python export_reversal_gate_diagnostics.py \
+      --jsonl yoloVids/outputs/tennis11/ai11.1.jsonl \
+      --reviews yoloVids/outputs/tennis11/track_reversal_review.csv \
+      --output-json yoloVids/outputs/tennis11/reversal_gate_diagnostics.json
+
 Two caller contracts, because the consumers need different things:
 - `rally_scoring_eligible` - conservative, excludes anything near a player.
 - `serve_landing_precondition` - permissive, allows a receiver-side bounce near
@@ -594,7 +635,8 @@ Speed
 Environment issues encountered
 - Ultralytics `track()` pulled in a missing `lap` dependency, so the YOLO-only script uses a custom simple tracker instead.
 - Running OpenCV/Ultralytics inside the coding sandbox produced OpenMP shared-memory errors.
-- Running directly in the user's local terminal worked.
+- `track_ball_yolo.py` now falls back to an FFmpeg raw-frame reader when OpenCV
+  cannot decode a video; the fallback is sequential and preserves frame order.
 
 Recommended workflow
 1. Edit `track_ball_yolo.py` or the tennis analysis scripts.

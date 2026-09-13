@@ -49,6 +49,35 @@ def render_staleness_message(output, analysis, missing_is_stale=False):
     return None
 
 
+def video_frame_count(path):
+    """Return the decoded video frame count, or None when it cannot be probed."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-count_frames", "-show_entries", "stream=nb_read_frames",
+             "-of", "default=nw=1:nk=1", path],
+            check=True, capture_output=True, text=True,
+        )
+        value = result.stdout.strip()
+        return int(value) if value.isdigit() else None
+    except (OSError, subprocess.CalledProcessError, ValueError):
+        return None
+
+
+def render_media_message(output, video):
+    """Describe a render whose encoded frame count differs from its input."""
+    input_frames = video_frame_count(video)
+    output_frames = video_frame_count(output)
+    if input_frames is None or output_frames is None:
+        return f"could not verify decoded frame counts for {output}"
+    if input_frames != output_frames:
+        return (
+            f"{output} has {output_frames} decoded frames but input {video} has "
+            f"{input_frames}; rerun the render"
+        )
+    return None
+
+
 def warn_stale_renders(jobs):
     stale = []
     for job in jobs:
@@ -182,6 +211,9 @@ def main():
         reason = render_staleness_message(output, analysis, missing_is_stale=True)
         if reason:
             raise RuntimeError(f"render freshness check failed: {reason}")
+        reason = render_media_message(output, video)
+        if reason:
+            raise RuntimeError(f"render media check failed: {reason}")
 
 
 if __name__ == "__main__":
