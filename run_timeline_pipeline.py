@@ -574,6 +574,12 @@ def stale_video_refusal_message(stale):
     )
 
 
+def stale_video_bundle_refusal(stale, allow_stale_videos):
+    if not stale or allow_stale_videos:
+        return None
+    return stale_video_refusal_message(stale)
+
+
 def write_demo_bundle(
     path,
     demo_index,
@@ -953,11 +959,11 @@ def main():
                 file=sys.stderr,
             )
         if stale:
-            message = stale_video_refusal_message(stale)
-            if not args.allow_stale_videos:
+            message = stale_video_bundle_refusal(stale, args.allow_stale_videos)
+            if message:
                 print(f"ERROR: {message}", file=sys.stderr)
                 raise SystemExit(3)
-            print(f"WARNING: {message}", file=sys.stderr)
+            print(f"WARNING: {stale_video_refusal_message(stale)}", file=sys.stderr)
         bundle_path = bundle_output_path(args)
         write_demo_bundle(
             bundle_path,

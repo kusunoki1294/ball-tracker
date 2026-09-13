@@ -132,6 +132,13 @@ def validate_stale_video_guard(output_dir):
     )
     if "refusing to bundle" not in message or "--render-videos" not in message:
         errors.append(f"stale-video refusal message is not actionable: {message!r}")
+    stale = [("game1", os.path.join(output_dir, "stale.mp4"), "stale")]
+    if run_timeline_pipeline.stale_video_bundle_refusal(stale, False) is None:
+        errors.append("bundling must refuse when a configured review MP4 is stale")
+    if run_timeline_pipeline.stale_video_bundle_refusal(stale, True) is not None:
+        errors.append("--allow-stale-videos must permit bundling with a stale review MP4")
+    if run_timeline_pipeline.stale_video_bundle_refusal([], False) is not None:
+        errors.append("bundling must proceed when no configured review MP4 is stale")
     return errors
 
 
