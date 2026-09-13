@@ -18,6 +18,7 @@ CORE_CHECKS = (
     ("serve detection", ("validate_serve_detection.py",)),
     ("court geometry", ("validate_court_geometry.py",)),
     ("bounce labels", ("eval_bounce_detect.py", "--check-labels")),
+    ("bounce known limits", ("validate_bounce_known_limits.py",)),
     ("association audit", ("validate_association_audit.py",)),
     ("player box audit", ("validate_player_box_audit.py",)),
 )
