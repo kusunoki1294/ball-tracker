@@ -100,7 +100,7 @@ def validate_config_video_alignment():
 
 
 def validate_stale_video_guard(output_dir):
-    """The bundler must refuse when a review MP4 predates the JSON it depicts.
+    """The stale-video decision must refuse an MP4 older than the JSON it depicts.
 
     Video rendering is opt-in behind --render-videos while pages regenerate every
     run, so without this guard a plain --bundle-demo ships fresh HTML beside a
