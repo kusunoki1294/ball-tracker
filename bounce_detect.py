@@ -232,6 +232,20 @@ def _box_distance(player, point):
     return float(np.hypot(dx, dy))
 
 
+SHAPE_RANK = {"high": 0, "medium": 1, "low": 2}
+
+
+def candidate_rank_key(candidate):
+    """Non-maximum suppression order: shape grade first, then score.
+
+    Module level so a test can assert the real ordering rather than a copy of
+    it. A replicated ranking drifts silently from the one that actually runs,
+    which is the same trap as testing a decision without testing that anything
+    consults it.
+    """
+    return (SHAPE_RANK[candidate["shape_confidence"]], -candidate["score"])
+
+
 def detect_bounces(rows, calib_points, params=None):
     """Find ball bounces in a tracking log. Returns a list of bounce dicts."""
     cfg = dict(DEFAULTS)
@@ -409,8 +423,7 @@ def detect_bounces(rows, calib_points, params=None):
     # Non-maximum suppression: one bounce per rebound. Rank by shape grade first
     # so a well-evidenced candidate is not displaced by a noisier one that
     # happens to score higher, then by score within a grade.
-    rank = {"high": 0, "medium": 1, "low": 2}
-    candidates.sort(key=lambda c: (rank[c["shape_confidence"]], -c["score"]))
+    candidates.sort(key=candidate_rank_key)
     kept = []
     for candidate in candidates:
         clash = next((k for k in kept
