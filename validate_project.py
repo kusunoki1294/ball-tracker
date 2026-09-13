@@ -20,6 +20,7 @@ CORE_CHECKS = (
     ("court geometry", ("validate_court_geometry.py",)),
     ("bounce labels", ("eval_bounce_detect.py", "--check-labels")),
     ("bounce recall evaluator", ("validate_bounce_recall_eval.py",)),
+    ("bounce recall template", ("validate_bounce_recall_template.py",)),
     ("bounce known limits", ("validate_bounce_known_limits.py",)),
     ("association audit", ("validate_association_audit.py",)),
     ("player box audit", ("validate_player_box_audit.py",)),
