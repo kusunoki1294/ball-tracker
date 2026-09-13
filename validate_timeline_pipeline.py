@@ -105,7 +105,8 @@ def validate_stale_video_guard(output_dir):
     Video rendering is opt-in behind --render-videos while pages regenerate every
     run, so without this guard a plain --bundle-demo ships fresh HTML beside a
     video burned with older hypothesis text.
-    This covers the decision only; that main() consults it is not verified here.
+    This covers the decision only; validate_stale_video_wiring checks that main()
+    consults that decision before writing the bundle.
     """
     import run_timeline_pipeline
 
@@ -140,6 +141,59 @@ def validate_stale_video_guard(output_dir):
         errors.append("--allow-stale-videos must permit bundling with a stale review MP4")
     if run_timeline_pipeline.stale_video_bundle_refusal([], False) is not None:
         errors.append("bundling must proceed when no configured review MP4 is stale")
+    return errors
+
+
+def validate_stale_video_wiring():
+    """main() must actually consult the stale-video decision before bundling.
+
+    validate_stale_video_guard proves the DECISION is right; it cannot prove
+    main() asks. Those are different failures, and the second is invisible to a
+    helper test: severing the call leaves every helper assertion passing while a
+    plain --bundle-demo happily ships a stale video.
+
+    Checked structurally rather than by a second pipeline pass, because running
+    the whole regeneration again to reach --bundle-demo cost ~260s. A static
+    check cannot prove runtime behaviour - it proves the call is present, its
+    result is tested, that test refuses, and that all of this precedes the
+    bundle write. That is the failure mode that actually occurred.
+    """
+    import ast
+
+    errors = []
+    with open("run_timeline_pipeline.py", "r", encoding="utf-8") as handle:
+        tree = ast.parse(handle.read())
+    main = next((node for node in tree.body
+                 if isinstance(node, ast.FunctionDef) and node.name == "main"), None)
+    if main is None:
+        return ["run_timeline_pipeline.py has no main() to check"]
+
+    refusal_call = None
+    for node in ast.walk(main):
+        if (isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)
+                and getattr(node.value.func, "id", None) == "stale_video_bundle_refusal"):
+            refusal_call = node
+            break
+    if refusal_call is None:
+        return ["main() never calls stale_video_bundle_refusal; a stale review MP4 "
+                "would be bundled without refusal"]
+
+    bound = {t.id for t in refusal_call.targets if isinstance(t, ast.Name)}
+    if not bound:
+        errors.append("main() discards the stale-video refusal instead of binding it")
+
+    refuses = False
+    for node in ast.walk(main):
+        if isinstance(node, ast.If) and isinstance(node.test, ast.Name) and node.test.id in bound:
+            if any(isinstance(inner, ast.Raise) for inner in ast.walk(node)):
+                refuses = True
+    if not refuses:
+        errors.append("main() computes the stale-video refusal but never raises on it")
+
+    writes = [node.lineno for node in ast.walk(main)
+              if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "write_demo_bundle"]
+    if writes and min(writes) < refusal_call.lineno:
+        errors.append("main() writes the bundle before consulting the stale-video refusal")
     return errors
 
 
@@ -479,6 +533,7 @@ def main():
     with tempfile.TemporaryDirectory() as tmpdir:
         errors.extend(validate_outputs(tmpdir))
         errors.extend(validate_stale_video_guard(tmpdir))
+    errors.extend(validate_stale_video_wiring())
     if errors:
         for error in errors:
             print(error, file=sys.stderr)
