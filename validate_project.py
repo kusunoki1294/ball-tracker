@@ -21,6 +21,7 @@ CORE_CHECKS = (
     ("bounce labels", ("eval_bounce_detect.py", "--check-labels")),
     ("bounce recall evaluator", ("validate_bounce_recall_eval.py",)),
     ("bounce recall template", ("validate_bounce_recall_template.py",)),
+    ("reversal diagnostics", ("validate_reversal_gate_diagnostics.py",)),
     ("bounce known limits", ("validate_bounce_known_limits.py",)),
     ("association audit", ("validate_association_audit.py",)),
     ("player box audit", ("validate_player_box_audit.py",)),
