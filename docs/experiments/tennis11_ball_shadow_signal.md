@@ -1,8 +1,22 @@
 # Does The Ball's Shadow Separate A Bounce From A Racket Contact?
 
+> **SUPERSEDED 2026-09-04.** This doc's "what would have to be true" was tested
+> and the signal was rejected — see `tennis_shadow_ranking_signal.md`. Across 44
+> labelled cases live-bounce and racket gaps overlap (0.96 vs 1.17), near-court
+> abstention is 41%, and the far court does **not** abstain as this doc predicted:
+> it resolves confidently on lines and net shadow at gaps *smaller* than genuine
+> bounces, reading every far-court event as a ground contact. The observations
+> below remain accurate; the forward-looking design at the end did not survive.
+
 Date: 2026-09-01
 Author: Federer
 Scope: experiment only. No gate built, no behaviour changed.
+
+Status note, 2026-09-04: this was the first, selected-frame check. The later
+population check in `tennis_shadow_ranking_signal.md` measured the signal across
+all 44 labelled tennis11 detections and rejected shadow as a ranking or gating
+signal. Read this file as historical evidence that the cue exists on selected
+near-court frames, not as implementation guidance.
 
 ## Why
 
@@ -42,8 +56,10 @@ or a line. There is nothing to measure. Note the three far cases are exactly the
 ones the hand labels call "ball too small to adjudicate" — the human could not do
 it either, so this is a property of the footage, not of the method.
 
-**Verdict: a near-court-only signal.** Useful for the near-player veto problem,
-which is a near-court problem, but it cannot become a general bounce test.
+**Verdict from this first pass: near-court only.** The later population check
+narrows that further: even near-court use is not supported by the current labels,
+and far-court cases must be hard not-applicable because they resolve on the
+wrong blobs.
 
 ## A mislabel found on the way
 
@@ -63,8 +79,9 @@ contact is a frame or two earlier.
 ## What would have to be true to use this
 
 Gap in units of ball diameter, measured over a window rather than at one frame,
-near court only, with an explicit abstain when no shadow is resolvable. That
-abstain matters: without it the far court would read as "no shadow, therefore not
-a bounce", which inverts the signal exactly where it has no information.
+near court only, with an explicit abstain when no shadow is resolvable. The
+follow-up showed that is still insufficient: far-court cases do not merely lack
+shadow, they resolve on the wrong blobs, so any future revisit must mark far
+court not-applicable by region rather than relying on the search to abstain.
 
 Not built. This records what the signal is and is not.
