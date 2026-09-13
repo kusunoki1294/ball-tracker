@@ -78,11 +78,13 @@ become valid by being applied to players instead of the net.
 ## Where the signal actually has to come from
 
 Recovering these needs a *new* observation, not a re-weighting of existing ones.
-The most promising candidate was in the hand label itself: "shadow confirms
-ground". That has now been checked in `tennis11_ball_shadow_signal.md`. The
-signal is real on the near court, but it is a gap-minimum signal rather than a
-"touching" test, and it does not survive far-court scale. It remains an
-experiment, not a gate.
+The most tempting candidate was in the hand label itself: "shadow confirms
+ground". The first check in `tennis11_ball_shadow_signal.md` showed the signal is
+real on selected near-court frames, but the follow-up population check in
+`tennis_shadow_ranking_signal.md` rejected it as a ranking or gating signal:
+live-bounce and racket-contact gaps overlap, near-court abstention is high, and
+far-court cases resolve confidently on the wrong blobs. It remains a rejected
+experiment, not a path to relaxing the veto.
 
 ## Status
 
