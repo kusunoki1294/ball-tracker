@@ -6,6 +6,7 @@ import the scoring/tracker stacks, and its compact JSON must not emit
 `point_frames` or any shape that can be pasted into a manifest as fact.
 """
 
+import csv
 import json
 import os
 import subprocess
@@ -456,6 +457,18 @@ def validate_outputs(output_dir):
                         errors.append(
                             f"{label}: expected {key}={expected_values[key]}, got {evaluation.get(key)}"
                         )
+        if label == "game 2":
+            labels_path = os.path.join("labels", "tennis11_game2_contact_labels.csv")
+            with open(labels_path, newline="", encoding="utf-8") as handle:
+                reader = csv.DictReader(handle)
+                if "pipeline_kind" in (reader.fieldnames or []):
+                    errors.append(
+                        "game 2 contact labels must not expose stale pipeline_kind as current state"
+                    )
+                if "pipeline_kind_at_label_time" not in (reader.fieldnames or []):
+                    errors.append(
+                        "game 2 contact labels must preserve the historical pipeline split explicitly"
+                    )
     return errors
 
 
