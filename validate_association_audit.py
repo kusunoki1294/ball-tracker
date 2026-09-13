@@ -21,10 +21,10 @@ CLIPS = [
 # Hand-checked against the source frames; see
 # docs/experiments/tennis9_association_labelled_set.md.
 EXPECTED_ROWS = {
-    ("tennis9", 1150): ("similar_size", "track_dies"),
-    ("tennis9", 1405): ("onto_larger_blob", "track_dies"),
-    ("tennis9", 1591): ("off_larger_blob", "track_dies"),
-    ("tennis9", 1839): ("off_larger_blob", "track_continues"),
+    ("tennis9", 1150): ("similar_size", "track_dies", "0.89", "0.82"),
+    ("tennis9", 1405): ("onto_larger_blob", "track_dies", "2.05", "0.82"),
+    ("tennis9", 1591): ("off_larger_blob", "track_dies", "0.87", "0.82"),
+    ("tennis9", 1839): ("off_larger_blob", "track_continues", "0.83", "0.82"),
 }
 
 VERDICT_WORDS = ("mis-association", "misassociation", "error", "bug", "wrong_object")
@@ -54,7 +54,7 @@ def main():
         if not rows:
             errors.append("association audit produced no rows")
         found = {(row["clip"], int(row["frame"])): row for row in rows}
-        for key, (size_class, outcome) in EXPECTED_ROWS.items():
+        for key, (size_class, outcome, depth_ratio, depth_corr) in EXPECTED_ROWS.items():
             row = found.get(key)
             if not row:
                 errors.append(f"{key}: hand-checked step missing from the audit")
@@ -63,6 +63,16 @@ def main():
                 errors.append(f"{key}: size_class {row['size_class']!r}, expected {size_class!r}")
             if row["track_outcome"] != outcome:
                 errors.append(f"{key}: track_outcome {row['track_outcome']!r}, expected {outcome!r}")
+            if row.get("size_vs_expected_depth") != depth_ratio:
+                errors.append(
+                    f"{key}: size_vs_expected_depth {row.get('size_vs_expected_depth')!r}, "
+                    f"expected {depth_ratio!r}"
+                )
+            if row.get("depth_model_corr") != depth_corr:
+                errors.append(
+                    f"{key}: depth_model_corr {row.get('depth_model_corr')!r}, "
+                    f"expected {depth_corr!r}"
+                )
         # The contract: the audit must not decide for the reviewer.
         for row in rows:
             if (row.get("review_verdict") or "").strip():
@@ -78,7 +88,9 @@ def main():
             page = handle.read()
         for phrase in ("Candidates for review, not findings",
                        "cannot tell those apart",
-                       "carry no verdict"):
+                       "carry no verdict",
+                       "size_vs_expected_depth",
+                       "depth_model_corr"):
             if phrase not in page:
                 errors.append(f"audit HTML missing its caveat: {phrase!r}")
     if errors:
