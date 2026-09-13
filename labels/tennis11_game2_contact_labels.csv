@@ -1,6 +1,6 @@
 clip,frame,seconds,pipeline_kind_at_label_time,claimed_server,label,evidence_source,confidence,note
 game 2,183,192.1,accepted,near,serve,source_video_sequence,high,"Toss, trophy, overhead contact, follow-through into court."
-game 2,257,194.6,accepted,far,non_serve,source_video_sequence,high,"PRE-ROLL RESOLVES: at -75 the near player is serving; the far player then moves laterally and contacts at waist height at 0. This is a RETURN of the near serve, not a serve. False positive in the accepted set."
+game 2,257,194.6,accepted,far,non_serve,source_video_sequence,high,"PRE-ROLL RESOLVES: at -75 the near player is serving; the far player then moves laterally and contacts at waist height at 0. This is a RETURN of the near serve, not a serve. False positive in the accepted set at labelling time."
 game 2,408,199.6,suppressed,far,non_serve,source_video_sequence,medium,"Pre-roll shows waist/chest-height contacts while moving; no toss, no extension. Rally shot. Correctly suppressed."
 game 2,623,206.8,suppressed,near,serve,source_video_sequence,high,"Motion sequence matches accepted serve f819 almost exactly: trophy, extension, overhead contact, landing into court. MISCLASSIFIED as rally motion."
 game 2,819,213.3,accepted,near,serve,source_video_sequence,high,Textbook serve motion.
@@ -8,9 +8,9 @@ game 2,918,216.6,suppressed,near,non_serve,source_video_sequence,high,"Ball arri
 game 2,1595,239.2,accepted,near,serve,source_video_sequence,high,"Toss visible above head, full extension, contact."
 game 2,1795,245.8,suppressed,near,ambiguous,source_video_sequence,low,"Serve-like extension at 0, but at +12 the player is upright with a ball beside him at head height, which does not follow a struck serve. Possibly an aborted or caught toss."
 game 2,1931,250.4,suppressed,near,non_serve,source_video_sequence,high,Racket never goes overhead; low across-body swing. Correctly suppressed.
-game 2,2116,256.5,accepted,far,non_serve,source_video_sequence,medium,"Pre-roll shows the far player walking into position then contacting at waist height while moving laterally. No toss or overhead extension. Rally shot, false positive in the accepted set."
+game 2,2116,256.5,accepted,far,non_serve,source_video_sequence,medium,"Pre-roll shows the far player walking into position then contacting at waist height while moving laterally. No toss or overhead extension. Rally shot, false positive in the accepted set at labelling time."
 game 2,2517,269.9,suppressed,near,serve,source_video_sequence,high,Full serve motion matching accepted serves. MISCLASSIFIED as rally motion. NOT flagged by the far-ball heuristic - a true miss of that test.
-game 2,2629,273.6,accepted,far,non_serve,source_video_sequence,medium,"Pre-roll shows lateral movement and a waist-height contact. Rally shot, false positive in the accepted set."
+game 2,2629,273.6,accepted,far,non_serve,source_video_sequence,medium,"Pre-roll shows lateral movement and a waist-height contact. Rally shot, false positive in the accepted set at labelling time."
 game 2,2990,285.7,accepted,near,serve,source_video_sequence,high,Textbook serve motion.
 game 2,3154,291.1,accepted,far,non_serve,source_video_sequence,low,Pre-roll shows the far player largely static with a waist-height contact; no service motion. Leaning rally shot. Far player is small in frame so detail is limited.
 game 2,3506,302.9,suppressed,near,serve,source_video_sequence,high,"Full serve motion, ball at racket at contact. MISCLASSIFIED as rally motion."

@@ -469,6 +469,12 @@ def validate_outputs(output_dir):
                     errors.append(
                         "game 2 contact labels must preserve the historical pipeline split explicitly"
                     )
+                for row in reader:
+                    note = (row.get("note") or "").lower()
+                    if "accepted set" in note and "at labelling time" not in note:
+                        errors.append(
+                            f"game 2 contact label f{row.get('frame')} describes a historical accepted set as current"
+                        )
     return errors
 
 
