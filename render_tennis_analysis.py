@@ -17,6 +17,15 @@ BOUNCE_COLOR = (0, 0, 255)
 # was worse: on a bright court it became nearly invisible, which hides the
 # evidence instead of qualifying it.
 PROVISIONAL_BOUNCE_COLOR = BOUNCE_COLOR
+# Review-only palette. Distinct hues so a reviewer can tell WHY a candidate is
+# not a scoring marker, without any of them competing with the red scoring
+# markers for attention.
+CANDIDATE_COLORS = {
+    "near_player": (150, 150, 150),
+    "dead_ball": (120, 90, 200),
+    "low_confidence": (90, 170, 230),
+    "not_live": (80, 80, 80),
+}
 TEXT_SHADOW = (0, 0, 0)
 
 
@@ -25,6 +34,13 @@ def parse_args():
     parser.add_argument("--video", required=True, help="Input video, typically ai9.3.avi.")
     parser.add_argument("--analysis", required=True, help="Analysis JSON from analyze_tennis_events.py.")
     parser.add_argument("--output", required=True, help="Output video path.")
+    parser.add_argument(
+        "--review-all-candidates",
+        action="store_true",
+        help="review only: also draw bounce candidates that are not scoring markers, "
+             "colour-coded by why they are excluded. Scoring markers keep their red "
+             "styling and their B-numbering, so the scoring read is unchanged.",
+    )
     parser.add_argument("--shot-label-frames", type=int, default=75, help="Frames to keep shot labels visible.")
     return parser.parse_args()
 
@@ -110,6 +126,23 @@ def analysis_bounce_visible(bounce, serve_bounce_ids):
     if bounce.get("id") in serve_bounce_ids:
         return True
     return bool(bounce.get("rally_scoring_eligible", True))
+
+
+def candidate_class(bounce, serve_bounce_ids):
+    """Why a bounce candidate is NOT drawn as a scoring marker.
+
+    Review only. Most hidden candidates are correctly hidden: on tennis11 game 1,
+    30 of 44 are hidden and 28 of those are racket contacts, dead balls or
+    tracking artifacts. Showing them unlabelled would imply the detector missed
+    real bounces; showing them classified explains the absence instead.
+    """
+    if not bounce.get("live", True):
+        return "not_live"
+    if bounce.get("dead_ball_candidate"):
+        return "dead_ball"
+    if bounce.get("near_player"):
+        return "near_player"
+    return "low_confidence"
 
 
 def bounce_is_provisional(bounce, serve_bounce_ids):
@@ -211,6 +244,21 @@ def main():
             }
         )
 
+    # Review-only second pass. Deliberately after the scoring markers are
+    # numbered, so enabling review cannot renumber or displace them.
+    if args.review_all_candidates:
+        for bounce in analysis.get("bounces", []):
+            point = bounce.get("point")
+            if not point or analysis_bounce_visible(bounce, serve_bounce_ids):
+                continue
+            bounces_by_frame.setdefault(int(bounce["frame"]), []).append(
+                {
+                    "point": (int(round(point[0])), int(round(point[1]))),
+                    "label": candidate_class(bounce, serve_bounce_ids),
+                    "candidate": candidate_class(bounce, serve_bounce_ids),
+                }
+            )
+
     points = analysis.get("points", [])
     cap = cv2.VideoCapture(args.video)
     if not cap.isOpened():
@@ -302,6 +350,14 @@ def main():
 
         for item in active_bounce_markers:
             x, y = item["point"]
+            candidate = item.get("candidate")
+            if candidate:
+                colour = CANDIDATE_COLORS.get(candidate, (140, 140, 140))
+                cv2.drawMarker(frame, (x, y), colour, markerType=cv2.MARKER_SQUARE,
+                               markerSize=11, thickness=1)
+                draw_text(frame, item["label"], (x + 7, max(16, y - 6)),
+                          scale=0.38, color=colour, thickness=1)
+                continue
             provisional = item.get("provisional")
             color = PROVISIONAL_BOUNCE_COLOR if provisional else BOUNCE_COLOR
             if provisional:
