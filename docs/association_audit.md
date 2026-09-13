@@ -53,3 +53,44 @@ real candidates.
 checks four hand-verified steps keep their observed classification, that no row
 ships a verdict, and that the HTML keeps its caveat. It reads tracking JSONL
 only and never imports or influences `track_ball_yolo`.
+
+## Depth-relative size (`size_vs_expected_depth`)
+
+`size_class` compares the landed object to the **previous frame**, which provably
+cannot separate an error from a recovery — they are the same jump in opposite
+directions. `size_vs_expected_depth` compares it to the expected ball size **at
+that image row**, fitted per clip, which can: an error lands on something too big
+for where it is, a recovery lands on something correctly sized.
+
+| tennis9 step | truth | `size_class` | `size_vs_expected_depth` |
+| --- | --- | --- | ---: |
+| f1405 | error | onto_larger_blob | **2.05** |
+| f1591 | recovery | off_larger_blob | 0.87 |
+| f1839 | recovery | off_larger_blob | 0.83 |
+| f1150 | error | similar_size | 0.89 |
+
+`f1150` stays invisible because it genuinely landed on a ball-sized object. Size
+cannot see that error, and no depth normalisation changes it.
+
+### Why this is a column and not a rule
+
+Combined with a jump — prediction error > 60 px **and** ≥ 1.8× expected size —
+this fires on **1 of 1451** continuous tennis9 steps, and that one is `f1405`, a
+true error. Precise, and it breaks neither known recovery.
+
+It is still not a production rejection rule: it catches **1 of 2** labelled
+errors, and a rule fitted to a single caught example is fitted to n=1.
+
+### `depth_model_corr` is reported for a reason
+
+The model is only as good as the clip's ball-height distribution. A near-player
+toss is high in frame *and* large, which flattens the relationship:
+
+| clip | correlation | combined rule fires |
+| --- | ---: | ---: |
+| tennis9 | 0.82 | 1 / 1451 |
+| tennis11 | **0.57** | 0 / 1713 |
+
+At 0.57 the column should not be trusted. It is printed beside every row so a
+reader can see that rather than reading an unreliable number as fact — the same
+reason the player-box audit prints its population `n`.

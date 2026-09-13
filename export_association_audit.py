@@ -23,6 +23,8 @@ import json
 import math
 import os
 
+import numpy as np
+
 
 DEFAULT_PREDICTION_ERROR_PX = 60.0
 SIZE_RATIO_LARGE = 1.6
@@ -50,6 +52,38 @@ def ball_size(ball):
     if not bbox or len(bbox) != 4:
         return None
     return float(max(bbox[2] - bbox[0], bbox[3] - bbox[1]))
+
+
+def depth_size_model(rows):
+    """Expected ball size at an image row, fitted per clip, with its correlation.
+
+    Comparing a landed object's size to the PREVIOUS frame cannot separate an
+    error from a recovery - they are the same jump in opposite directions. Size
+    against expected size AT THAT DEPTH can: an error lands on something too big
+    for where it is, a recovery lands on something correctly sized.
+
+    The correlation is returned and reported because the model is only as good as
+    the clip's ball-height distribution. A near-player toss is high in frame and
+    large, which flattens the relationship - tennis9 fits at 0.82, tennis11 at
+    0.57. A reader must be able to see that before trusting the column.
+    """
+    ys, sizes = [], []
+    for record in rows.values():
+        ball = record.get("ball")
+        if not ball or ball.get("interpolated") or ball.get("motion_gate") == "coast":
+            continue
+        bbox = ball.get("bbox")
+        if not bbox or len(bbox) != 4:
+            continue
+        ys.append(float(ball["center"][1]))
+        sizes.append(float(max(bbox[2] - bbox[0], bbox[3] - bbox[1])))
+    if len(ys) < 20:
+        return (lambda y: None), None
+    ys_a, sizes_a = np.array(ys), np.array(sizes)
+    matrix = np.vstack([ys_a, np.ones(len(ys_a))]).T
+    slope, intercept = np.linalg.lstsq(matrix, sizes_a, rcond=None)[0]
+    correlation = float(np.corrcoef(ys_a, sizes_a)[0, 1])
+    return (lambda y: max(3.0, slope * y + intercept)), round(correlation, 2)
 
 
 def size_class(before, after):
@@ -87,6 +121,7 @@ def collect(label, path, fps, min_error):
             if line.strip():
                 record = json.loads(line)
                 rows[int(record["frame"])] = record
+    expected_size, depth_corr = depth_size_model(rows)
     found = []
     for frame in sorted(rows):
         record = rows[frame]
@@ -112,6 +147,7 @@ def collect(label, path, fps, min_error):
             jump = math.hypot(current["center"][0] - previous["center"][0],
                               current["center"][1] - previous["center"][1])
         before, after = ball_size(previous), ball_size(current)
+        landed_expected = expected_size(current["center"][1]) if current else None
         outcome, reasons = track_outcome(rows, frame)
         found.append({
             "clip": label,
@@ -123,6 +159,12 @@ def collect(label, path, fps, min_error):
             "size_after_px": after,
             "size_ratio": None if not (before and after) else round(max(before, after) / max(1.0, min(before, after)), 2),
             "size_class": size_class(before, after),
+            # Depth-relative, unlike size_class which is previous-frame-relative
+            # and therefore blind to the error/recovery distinction.
+            "size_vs_expected_depth": (
+                None if not (after and landed_expected) else round(after / landed_expected, 2)
+            ),
+            "depth_model_corr": depth_corr,
             "track_outcome": outcome,
             "selector_reason": selector.get("reason"),
             "following_reasons": "|".join(reasons),
@@ -133,6 +175,7 @@ def collect(label, path, fps, min_error):
 
 FIELDS = ["clip", "frame", "seconds", "prediction_error_px", "jump_px",
           "size_before_px", "size_after_px", "size_ratio", "size_class",
+          "size_vs_expected_depth", "depth_model_corr",
           "track_outcome", "selector_reason", "following_reasons", "review_verdict"]
 
 
