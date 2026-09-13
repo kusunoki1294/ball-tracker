@@ -195,6 +195,11 @@ This writes per-point debug PNGs to `yoloVids/outputs/tennis9/play_segments/poin
 Magenta `B?` markers are conservative trajectory-based missed-bounce candidates for review; they are not counted as live scoring bounces.
 It also writes a browser-readable report to `yoloVids/outputs/tennis9/play_segments/match_report.html` and compact structured data to `match_report_data.json`.
 
+For a full candidate-review render, add `"review_all_candidates": true` to a
+render job in the manifest. This is opt-in and audit-only: it exposes detector
+candidates that the normal scoring overlay intentionally hides, with labels for
+why they were excluded. It does not change the analysis JSON or scoring.
+
 After regenerating tennis9 outputs, validate the known-good scoring and point-ending behavior:
 
 python validate_tennis9_regression.py
