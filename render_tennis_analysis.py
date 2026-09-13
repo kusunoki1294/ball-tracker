@@ -155,7 +155,21 @@ def bounce_is_provisional(bounce, serve_bounce_ids):
     consumed despite failing serve_landing_precondition, which is a judgement a
     viewer should be able to see rather than infer.
     """
-    if bounce.get("detector_confidence") == "low":
+    # Solid red should mean the bounce itself is well evidenced. Two things
+    # weaken that, and both are properties of the BOUNCE:
+    #   - the detector graded it below high
+    #   - there was no observation at the bounce instant, so the drawn position
+    #     is the arc-join midpoint rather than a sighting (provenance
+    #     "interpolated")
+    # bounce_022/f1145 is both, and rendered solid red until now.
+    #
+    # Measured and rejected: qualifying on any review_reasons. That marks 6 of 12
+    # markers, including four high-confidence sampled bounces, because those
+    # flags - low_stroke_confidence, low_speed_quality, low_link_quality - are
+    # mostly about the linked SHOT, not the bounce.
+    if bounce.get("detector_confidence") != "high":
+        return True
+    if bounce.get("provenance") == "interpolated":
         return True
     return bounce.get("id") in serve_bounce_ids and not bounce.get(
         "rally_scoring_eligible", True

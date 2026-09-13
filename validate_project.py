@@ -22,6 +22,7 @@ CORE_CHECKS = (
     ("bounce known limits", ("validate_bounce_known_limits.py",)),
     ("association audit", ("validate_association_audit.py",)),
     ("player box audit", ("validate_player_box_audit.py",)),
+    ("render marker contract", ("validate_render_marker_contract.py",)),
 )
 
 FULL_CHECKS = (
