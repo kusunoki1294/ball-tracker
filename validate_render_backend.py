@@ -1,5 +1,6 @@
 """Validate that the render backend produces a decodable video."""
 
+import json
 import os
 import subprocess
 import tempfile
@@ -28,9 +29,11 @@ def main():
              "-of", "json", path],
             check=True, capture_output=True, text=True,
         )
-        if '"nb_frames": "2"' not in probe.stdout:
+        data = json.loads(probe.stdout)
+        stream = (data.get("streams") or [{}])[0]
+        if int(stream.get("nb_frames", 0)) != 2:
             raise AssertionError(f"render output was not two decodable frames: {probe.stdout}")
-        if '"width": 64' not in probe.stdout or '"height": 48' not in probe.stdout:
+        if int(stream.get("width", 0)) != 64 or int(stream.get("height", 0)) != 48:
             raise AssertionError(f"render output has unexpected dimensions: {probe.stdout}")
     print("render backend validation passed (2 decodable frames)")
 
