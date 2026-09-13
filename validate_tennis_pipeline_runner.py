@@ -19,6 +19,17 @@ def touch(path, mtime):
 
 def main():
     errors = []
+    command = run_tennis_pipeline.render_command({
+        "video": "source.mp4", "output": "review.mp4",
+        "review_all_candidates": True,
+    }, "analysis.json")
+    if "--review-all-candidates" not in command:
+        errors.append("manifest review_all_candidates must reach renderer command")
+    default_command = run_tennis_pipeline.render_command(
+        {"video": "source.mp4", "output": "review.mp4"}, "analysis.json"
+    )
+    if "--review-all-candidates" in default_command:
+        errors.append("review-all mode must remain opt-in")
     with mock.patch.object(
         run_tennis_pipeline,
         "video_frame_count",
@@ -63,7 +74,10 @@ def main():
         with open(manifest_path, "w", encoding="utf-8") as handle:
             json.dump({
                 "output": analysis,
-                "renders": [{"name": "review", "output": render, "analysis": analysis}],
+                "renders": [{
+                    "name": "review", "output": render, "analysis": analysis,
+                    "review_all_candidates": True,
+                }],
             }, handle)
         original_argv = sys.argv[:]
         stderr = io.StringIO()

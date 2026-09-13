@@ -101,6 +101,21 @@ def render_jobs(manifest):
     return jobs
 
 
+def render_command(job, default_analysis):
+    video = job.get("video")
+    output = job.get("output")
+    analysis = job.get("analysis") or default_analysis
+    if not video or not output:
+        raise ValueError("each render job must define 'video' and 'output'")
+    command = [
+        sys.executable, "render_tennis_analysis.py", "--video", video,
+        "--analysis", analysis, "--output", output,
+    ]
+    if job.get("review_all_candidates", False):
+        command.append("--review-all-candidates")
+    return command
+
+
 def audit_config(manifest):
     audit = manifest.get("audit")
     if audit is None:
@@ -196,18 +211,7 @@ def main():
         analysis = job.get("analysis") or analysis_path
         if not video or not output:
             raise ValueError("each render job must define 'video' and 'output'")
-        run_command(
-            [
-                sys.executable,
-                "render_tennis_analysis.py",
-                "--video",
-                video,
-                "--analysis",
-                analysis,
-                "--output",
-                output,
-            ]
-        )
+        run_command(render_command(job, analysis_path))
         reason = render_staleness_message(output, analysis, missing_is_stale=True)
         if reason:
             raise RuntimeError(f"render freshness check failed: {reason}")
