@@ -334,6 +334,10 @@ def main():
 
     bounces_by_frame = {}
     visible_bounce_count = 0
+    hidden_bounce_count = sum(
+        1 for bounce in analysis.get("bounces", [])
+        if bounce.get("point") and not analysis_bounce_visible(bounce, serve_bounce_ids)
+    )
     for bounce in analysis.get("bounces", []):
         point = bounce.get("point")
         if not point or not analysis_bounce_visible(bounce, serve_bounce_ids):
@@ -488,7 +492,11 @@ def main():
 
     cap.release()
     writer.release()
-    print(f"wrote {args.output}: {frame_index} frames")
+    print(
+        f"wrote {args.output}: {frame_index} frames; "
+        f"{visible_bounce_count} scoring-visible bounce markers, "
+        f"{hidden_bounce_count} review-only candidates"
+    )
 
 
 if __name__ == "__main__":
