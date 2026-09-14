@@ -3,7 +3,7 @@
 import csv
 import tempfile
 
-from export_bounce_recall_template import FIELDS, export_template
+from export_bounce_recall_template import SOURCE_FIELDS, export_template
 
 
 def main():
@@ -22,7 +22,7 @@ def main():
         source = f"{directory}/source.csv"
         output = f"{directory}/output.csv"
         with open(source, "w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=[*FIELDS[:7], "near_existing_candidate"])
+            writer = csv.DictWriter(handle, fieldnames=[*SOURCE_FIELDS, "near_existing_candidate"])
             writer.writeheader()
             writer.writerows(source_rows)
         if export_template(source, output) != 1:
@@ -30,7 +30,9 @@ def main():
             return 1
         with open(output, newline="", encoding="utf-8") as handle:
             rows = list(csv.DictReader(handle))
-        if rows[0]["frame"] != "123" or rows[0]["label"] or rows[0]["reviewer_confidence"]:
+        if (rows[0]["frame"] != "123"
+                or rows[0]["review_scope"] != "candidate_free_reversal"
+                or rows[0]["label"] or rows[0]["reviewer_confidence"]):
             print("template must preserve event data and leave review fields blank")
             return 1
     print("bounce recall template validation passed")

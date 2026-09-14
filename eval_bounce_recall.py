@@ -29,11 +29,21 @@ def require_label(row, path, index):
     return label
 
 
+def require_candidate_free_scope(row, index):
+    if row.get("review_scope") != "candidate_free_reversal":
+        raise ValueError(
+            f"candidate-free labels row {index}: review_scope must be "
+            "'candidate_free_reversal'"
+        )
+
+
 def evaluate(detector_rows, candidate_free_rows):
     detector_labels = [require_label(row, "detector labels", i)
                        for i, row in enumerate(detector_rows, start=2)]
-    candidate_labels = [require_label(row, "candidate-free labels", i)
-                        for i, row in enumerate(candidate_free_rows, start=2)]
+    candidate_labels = []
+    for i, row in enumerate(candidate_free_rows, start=2):
+        require_candidate_free_scope(row, i)
+        candidate_labels.append(require_label(row, "candidate-free labels", i))
     detected_live = sum(label == "live_bounce" for label in detector_labels)
     candidate_free_live = sum(label == "live_bounce" for label in candidate_labels)
     known_live = detected_live + candidate_free_live

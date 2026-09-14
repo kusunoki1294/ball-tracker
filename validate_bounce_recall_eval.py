@@ -10,8 +10,8 @@ def main():
         {"label": "dead_bounce"},
     ]
     candidate_free = [
-        {"label": "live_bounce"},
-        {"label": "ambiguous"},
+        {"label": "live_bounce", "review_scope": "candidate_free_reversal"},
+        {"label": "ambiguous", "review_scope": "candidate_free_reversal"},
     ]
     result = evaluate(detector, candidate_free)
     errors = []
@@ -24,11 +24,19 @@ def main():
     if result["not_scoring_truth"] is not True:
         errors.append("evaluation must be marked not_scoring_truth")
     try:
-        evaluate(detector, [{"label": ""}])
+        evaluate(detector, [{"label": "", "review_scope": "candidate_free_reversal"}])
     except ValueError:
         pass
     else:
         errors.append("blank candidate-free labels must fail before metrics are emitted")
+    try:
+        evaluate(detector, [{
+            "label": "live_bounce", "review_scope": "wrong_population"
+        }])
+    except ValueError:
+        pass
+    else:
+        errors.append("wrong candidate-free population must fail before metrics are emitted")
 
     if errors:
         for error in errors:
