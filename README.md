@@ -448,6 +448,14 @@ The cards report observed coverage only: interpolated and coasted positions are
 excluded. Labels remain evaluation-only until they are reviewed against the
 source video.
 
+After completing the sheet, evaluate the reviewed candidate-free population
+without feeding it into scoring:
+
+    .venv/bin/python eval_bounce_recall.py \
+      --detector-labels labels/tennis11_game1_bounce_labels.csv \
+      --candidate-free-labels yoloVids/outputs/tennis11/tennis11_candidate_free_bounce_labels.csv \
+      --output-json yoloVids/outputs/tennis11/tennis11_bounce_recall.json
+
 Candidate-free cards are ordered by an evidence-review score derived from
 reversal strength, fit residual, and observed samples. This is only a review
 priority for choosing which card to inspect first; it is not a bounce
