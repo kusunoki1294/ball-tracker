@@ -425,6 +425,23 @@ Example:
       --reviews yoloVids/outputs/tennis11/track_reversal_review.csv \
       --output-json yoloVids/outputs/tennis11/reversal_gate_diagnostics.json
 
+For a complete candidate-free labeling pass, generate the frame-accurate HTML
+cards and a matching blank label sheet:
+
+    .venv/bin/python export_candidate_free_preroll_review.py \
+      --video yoloVids/inputs/tennis11_game1.mp4 \
+      --jsonl yoloVids/outputs/tennis11/ai11.1.jsonl \
+      --reviews yoloVids/outputs/tennis11/track_reversal_review.csv \
+      --output yoloVids/outputs/tennis11/tennis11_candidate_free_bounce_review.html
+
+    .venv/bin/python export_bounce_recall_template.py \
+      --input yoloVids/outputs/tennis11/track_reversal_review.csv \
+      --output yoloVids/outputs/tennis11/tennis11_candidate_free_bounce_labels.csv
+
+The cards report observed coverage only: interpolated and coasted positions are
+excluded. Labels remain evaluation-only until they are reviewed against the
+source video.
+
 Two caller contracts, because the consumers need different things:
 - `rally_scoring_eligible` - conservative, excludes anything near a player.
 - `serve_landing_precondition` - permissive, allows a receiver-side bounce near
