@@ -2,6 +2,7 @@
 
 import argparse
 import csv
+import json
 
 from export_timeline_preroll_review import export_review
 
@@ -33,14 +34,41 @@ def read_events(path):
     return sorted(events, key=lambda item: item["review_evidence_score"], reverse=True)
 
 
+def load_diagnostics(path):
+    if not path:
+        return {}
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+    return {str(event["frame"]): event for event in data.get("events", [])}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--video", required=True)
     parser.add_argument("--jsonl", required=True)
     parser.add_argument("--reviews", required=True)
+    parser.add_argument("--diagnostics",
+                        help="Optional review-only context JSON keyed by reversal frame.")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     events = read_events(args.reviews)
+    diagnostics = load_diagnostics(args.diagnostics)
+    for event in events:
+        context = diagnostics.get(str(event["frame"]))
+        if not context:
+            continue
+        scene = context.get("scene_context") or {}
+        players = scene.get("nearest_player") or {}
+        player_distances = [details.get("distance_px") for details in players.values()
+                            if details.get("distance_px") is not None]
+        nearest_player = min(player_distances) if player_distances else None
+        racket = scene.get("nearest_racket_distance_px")
+        context_parts = ["context only; not a bounce label"]
+        if nearest_player is not None:
+            context_parts.append(f"nearest player {nearest_player:.1f}px")
+        if racket is not None:
+            context_parts.append(f"nearest racket {racket:.1f}px")
+        event["note"] += "; " + ", ".join(context_parts)
     if not events:
         raise SystemExit("review CSV contains no candidate-free events")
     export_review([{
