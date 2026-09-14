@@ -1,13 +1,18 @@
 """Validate candidate-free pre-roll review input filtering."""
 
 import csv
+import inspect
 import tempfile
 
 from export_candidate_free_preroll_review import read_events
-from export_timeline_preroll_review import tracked_points
+from export_timeline_preroll_review import export_review, tracked_points
 
 
 def main():
+    renderer_source = inspect.getsource(export_review)
+    if "reviewer_confidence" not in renderer_source or "complete labels and confidence" not in renderer_source:
+        print("review export must require reviewer confidence")
+        return 1
     with tempfile.NamedTemporaryFile(mode="w", newline="", suffix=".csv") as handle:
         writer = csv.DictWriter(handle, fieldnames=[
             "frame", "near_existing_candidate", "status",
