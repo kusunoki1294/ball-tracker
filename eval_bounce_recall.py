@@ -13,6 +13,7 @@ import sys
 
 
 VALID_LABELS = {"live_bounce", "dead_bounce", "racket", "tracking_artifact", "ambiguous"}
+VALID_REVIEWER_CONFIDENCES = {"high", "medium", "low"}
 
 
 def read_rows(path):
@@ -37,21 +38,41 @@ def require_candidate_free_scope(row, index):
         )
 
 
+def require_reviewer_confidence(row, index):
+    confidence = (row.get("reviewer_confidence") or "").strip()
+    if confidence not in VALID_REVIEWER_CONFIDENCES:
+        raise ValueError(
+            f"candidate-free labels row {index}: reviewer_confidence must be one of "
+            f"{sorted(VALID_REVIEWER_CONFIDENCES)}, got {confidence!r}"
+        )
+    return confidence
+
+
 def evaluate(detector_rows, candidate_free_rows):
     detector_labels = [require_label(row, "detector labels", i)
                        for i, row in enumerate(detector_rows, start=2)]
     candidate_labels = []
+    candidate_confidences = []
     for i, row in enumerate(candidate_free_rows, start=2):
         require_candidate_free_scope(row, i)
         candidate_labels.append(require_label(row, "candidate-free labels", i))
+        candidate_confidences.append(require_reviewer_confidence(row, i))
     detected_live = sum(label == "live_bounce" for label in detector_labels)
     candidate_free_live = sum(label == "live_bounce" for label in candidate_labels)
+    candidate_free_live_by_confidence = {
+        confidence: sum(
+            label == "live_bounce" and row_confidence == confidence
+            for label, row_confidence in zip(candidate_labels, candidate_confidences)
+        )
+        for confidence in sorted(VALID_REVIEWER_CONFIDENCES)
+    }
     known_live = detected_live + candidate_free_live
     return {
         "detector_proposals": len(detector_labels),
         "candidate_free_events": len(candidate_labels),
         "detected_live_bounces": detected_live,
         "candidate_free_live_bounces": candidate_free_live,
+        "candidate_free_live_bounces_by_confidence": candidate_free_live_by_confidence,
         "reviewed_live_bounces": known_live,
         "recall_before_retracking": detected_live / known_live if known_live else None,
         "detector_live_precision": detected_live / len(detector_labels) if detector_labels else None,

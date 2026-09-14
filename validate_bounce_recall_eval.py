@@ -10,8 +10,8 @@ def main():
         {"label": "dead_bounce"},
     ]
     candidate_free = [
-        {"label": "live_bounce", "review_scope": "candidate_free_reversal"},
-        {"label": "ambiguous", "review_scope": "candidate_free_reversal"},
+        {"label": "live_bounce", "review_scope": "candidate_free_reversal", "reviewer_confidence": "high"},
+        {"label": "ambiguous", "review_scope": "candidate_free_reversal", "reviewer_confidence": "medium"},
     ]
     result = evaluate(detector, candidate_free)
     errors = []
@@ -21,6 +21,8 @@ def main():
         errors.append("detected live-bounce count must come only from detector labels")
     if result["recall_before_retracking"] != 0.5:
         errors.append("recall must be detected live divided by reviewed live")
+    if result["candidate_free_live_bounces_by_confidence"] != {"high": 1, "low": 0, "medium": 0}:
+        errors.append("candidate-free live counts must retain reviewer confidence")
     if result["not_scoring_truth"] is not True:
         errors.append("evaluation must be marked not_scoring_truth")
     try:
@@ -29,6 +31,15 @@ def main():
         pass
     else:
         errors.append("blank candidate-free labels must fail before metrics are emitted")
+    try:
+        evaluate(detector, [{
+            "label": "live_bounce", "review_scope": "candidate_free_reversal",
+            "reviewer_confidence": "",
+        }])
+    except ValueError:
+        pass
+    else:
+        errors.append("candidate-free labels without confidence must fail before metrics are emitted")
     try:
         evaluate(detector, [{
             "label": "live_bounce", "review_scope": "wrong_population"
