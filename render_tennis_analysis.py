@@ -333,6 +333,8 @@ def main():
                 )
 
     bounces_by_frame = {}
+    point_bounce_counts = {}
+    point_visible_counts = {}
     visible_bounce_count = 0
     hidden_bounce_count = sum(
         1 for bounce in analysis.get("bounces", [])
@@ -340,8 +342,13 @@ def main():
     )
     for bounce in analysis.get("bounces", []):
         point = bounce.get("point")
+        point_index = bounce.get("point_index")
+        if point_index is not None:
+            point_bounce_counts[point_index] = point_bounce_counts.get(point_index, 0) + 1
         if not point or not analysis_bounce_visible(bounce, serve_bounce_ids):
             continue
+        if point_index is not None:
+            point_visible_counts[point_index] = point_visible_counts.get(point_index, 0) + 1
         visible_bounce_count += 1
         provisional = bounce_is_provisional(bounce, serve_bounce_ids)
         bounces_by_frame.setdefault(int(bounce["frame"]), []).append(
@@ -471,14 +478,22 @@ def main():
             )
         else:
             legend_x = max(470, width - 650)
-            cv2.rectangle(frame, (legend_x, 58), (width - 18, 124), PANEL_COLOR, -1)
-            cv2.rectangle(frame, (legend_x, 58), (width - 18, 124), (90, 100, 110), 1)
+            cv2.rectangle(frame, (legend_x, 58), (width - 18, 156), PANEL_COLOR, -1)
+            cv2.rectangle(frame, (legend_x, 58), (width - 18, 156), (90, 100, 110), 1)
             draw_text(frame, "BOUNCE STATUS", (legend_x + 16, 86), scale=0.62,
                       color=(255, 255, 255), thickness=2)
             draw_text(
                 frame,
                 f"shown: {visible_bounce_count} scoring-visible  |  withheld: {hidden_bounce_count} review-only",
                 (legend_x + 16, 110), scale=0.44, color=(220, 230, 240), thickness=1,
+            )
+            point_index = active_point.get("index") if active_point else None
+            total_for_point = point_bounce_counts.get(point_index, 0)
+            shown_for_point = point_visible_counts.get(point_index, 0)
+            draw_text(
+                frame,
+                f"active point candidates: {shown_for_point} shown / {total_for_point} detected",
+                (legend_x + 16, 136), scale=0.42, color=(220, 230, 240), thickness=1,
             )
 
         for index, item in enumerate(active_serve_labels):
