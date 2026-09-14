@@ -5,13 +5,13 @@ from eval_bounce_recall import evaluate
 
 def main():
     detector = [
-        {"label": "live_bounce"},
-        {"label": "racket"},
-        {"label": "dead_bounce"},
+        {"frame": "1", "label": "live_bounce"},
+        {"frame": "2", "label": "racket"},
+        {"frame": "3", "label": "dead_bounce"},
     ]
     candidate_free = [
-        {"label": "live_bounce", "review_scope": "candidate_free_reversal", "reviewer_confidence": "high"},
-        {"label": "ambiguous", "review_scope": "candidate_free_reversal", "reviewer_confidence": "medium"},
+        {"frame": "4", "label": "live_bounce", "review_scope": "candidate_free_reversal", "reviewer_confidence": "high"},
+        {"frame": "5", "label": "ambiguous", "review_scope": "candidate_free_reversal", "reviewer_confidence": "medium"},
     ]
     result = evaluate(detector, candidate_free)
     errors = []
@@ -26,14 +26,14 @@ def main():
     if result["not_scoring_truth"] is not True:
         errors.append("evaluation must be marked not_scoring_truth")
     try:
-        evaluate(detector, [{"label": "", "review_scope": "candidate_free_reversal"}])
+        evaluate(detector, [{"frame": "6", "label": "", "review_scope": "candidate_free_reversal"}])
     except ValueError:
         pass
     else:
         errors.append("blank candidate-free labels must fail before metrics are emitted")
     try:
         evaluate(detector, [{
-            "label": "live_bounce", "review_scope": "candidate_free_reversal",
+            "frame": "6", "label": "live_bounce", "review_scope": "candidate_free_reversal",
             "reviewer_confidence": "",
         }])
     except ValueError:
@@ -42,12 +42,21 @@ def main():
         errors.append("candidate-free labels without confidence must fail before metrics are emitted")
     try:
         evaluate(detector, [{
-            "label": "live_bounce", "review_scope": "wrong_population"
+            "frame": "6", "label": "live_bounce", "review_scope": "wrong_population",
         }])
     except ValueError:
         pass
     else:
         errors.append("wrong candidate-free population must fail before metrics are emitted")
+    try:
+        evaluate(detector, [{
+            "frame": "2", "label": "live_bounce",
+            "review_scope": "candidate_free_reversal", "reviewer_confidence": "high",
+        }])
+    except ValueError:
+        pass
+    else:
+        errors.append("overlapping frame populations must fail before metrics are emitted")
 
     if errors:
         for error in errors:

@@ -48,7 +48,25 @@ def require_reviewer_confidence(row, index):
     return confidence
 
 
+def require_disjoint_frame_populations(detector_rows, candidate_free_rows):
+    detector_frames = [str(row.get("frame", "")).strip() for row in detector_rows]
+    candidate_frames = [str(row.get("frame", "")).strip() for row in candidate_free_rows]
+    if not all(detector_frames) or not all(candidate_frames):
+        raise ValueError("recall labels must include frame for population integrity")
+    if len(set(detector_frames)) != len(detector_frames):
+        raise ValueError("detector labels contain duplicate frames")
+    if len(set(candidate_frames)) != len(candidate_frames):
+        raise ValueError("candidate-free labels contain duplicate frames")
+    overlap = sorted(set(detector_frames) & set(candidate_frames))
+    if overlap:
+        raise ValueError(
+            "detector and candidate-free labels overlap at frame(s): "
+            + ", ".join(overlap)
+        )
+
+
 def evaluate(detector_rows, candidate_free_rows):
+    require_disjoint_frame_populations(detector_rows, candidate_free_rows)
     detector_labels = [require_label(row, "detector labels", i)
                        for i, row in enumerate(detector_rows, start=2)]
     candidate_labels = []
