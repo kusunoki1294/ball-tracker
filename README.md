@@ -442,6 +442,11 @@ The cards report observed coverage only: interpolated and coasted positions are
 excluded. Labels remain evaluation-only until they are reviewed against the
 source video.
 
+Candidate-free cards are ordered by an evidence-review score derived from
+reversal strength, fit residual, and observed samples. This is only a review
+priority for choosing which card to inspect first; it is not a bounce
+probability or an automatic label.
+
 Two caller contracts, because the consumers need different things:
 - `rally_scoring_eligible` - conservative, excludes anything near a player.
 - `serve_landing_precondition` - permissive, allows a receiver-side bounce near
