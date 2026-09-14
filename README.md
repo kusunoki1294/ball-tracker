@@ -578,7 +578,10 @@ Ball-track recall is the bottleneck for full automation
   `docs/experiments/tennis9_association_signals.md`,
   `docs/experiments/tennis9_association_labelled_set.md`, and
   `docs/experiments/tennis9_f1446_suppression.md`; the rejected shadow result is
-  recorded in `docs/experiments/tennis_shadow_ranking_signal.md`.
+  recorded in `docs/experiments/tennis_shadow_ranking_signal.md`. A parameter
+  sweep and ball-candidate model smoke test likewise recovered no remaining
+  miss: see `docs/experiments/tennis9_bounce_parameter_sweep.md` and
+  `docs/experiments/tennis9_ball_ai_model_smoke.md`.
 - Point timeline automation exists as `timeline_hypotheses.py`, but it is not a
   scoring source. On game 1 it now emits 6 hypotheses for the 6 verified points
   while retaining all 13 serve-like motions for audit; the extra motions are
