@@ -105,6 +105,14 @@ def ball_size(row):
     return None
 
 
+def is_observed_ball(row):
+    """Return whether the row contains a detector observation, not a hold."""
+    ball = (row or {}).get("ball") or {}
+    return bool(ball.get("center") or ball.get("bbox")) and not (
+        ball.get("interpolated") or ball.get("motion_gate") == "coast"
+    )
+
+
 def resize_frame(frame):
     height, width = frame.shape[:2]
     scale = OUTPUT_WIDTH / float(width)
@@ -203,6 +211,8 @@ def tracked_points(by_frame, start_frame, end_frame):
     points = []
     for frame in range(start_frame, end_frame + 1):
         row = by_frame.get(frame)
+        if not is_observed_ball(row):
+            continue
         center = ball_center(row)
         if center:
             points.append((frame, center, ball_size(row)))
@@ -246,7 +256,7 @@ def export_review(clips, output):
                 f"<h2>{esc(clip['label'])} f{frame}</h2>"
                 f"<p><strong>{esc(item.get('kind'))}</strong> — {esc(item.get('note'))}</p>"
                 f"<p class=\"coverage\">trail interval: f{start_frame}-f{frame} "
-                f"({esc(interval_source)}); tracked coverage: {tracked}/{total} frames ({coverage}%)</p>"
+                f"({esc(interval_source)}); observed coverage: {tracked}/{total} frames ({coverage}%)</p>"
                 "<figure class=\"trail\">"
                 f"<img src=\"{esc(rel)}\" alt=\"{esc(clip['label'])} tracked-ball trail ending at frame {frame}\">"
                 "<figcaption>blue = oldest tracked ball, red ring = latest tracked ball; dot size follows tracked bbox size</figcaption>"
@@ -283,7 +293,7 @@ def export_review(clips, output):
   distinguish a serve from a rally overhead. Each card overlays an image-space tracked-ball trail
   on the contact frame. Controls with a known previous contact use that full interval; other cards
   fall back to the previous two seconds. The trail deliberately does not use ground-projected court
-  side, because airborne balls make that projection unreliable. Read the tracked coverage line before
+  side, because airborne balls make that projection unreliable. Read the observed coverage line before
   trusting missing trail segments.</div>
   <section class="grid">{''.join(cards)}</section>
 </body>

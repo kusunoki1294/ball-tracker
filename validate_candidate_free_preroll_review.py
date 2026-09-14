@@ -4,6 +4,7 @@ import csv
 import tempfile
 
 from export_candidate_free_preroll_review import read_events
+from export_timeline_preroll_review import tracked_points
 
 
 def main():
@@ -28,6 +29,15 @@ def main():
         return 1
     if "review only" not in events[0]["note"]:
         print("pre-roll note must preserve review-only semantics")
+        return 1
+    rows = {
+        1: {"ball": {"center": [10, 10], "bbox": [8, 8, 12, 12]}},
+        2: {"ball": {"center": [20, 20], "interpolated": True}},
+        3: {"ball": {"center": [30, 30], "motion_gate": "coast"}},
+    }
+    observed = tracked_points(rows, 1, 3)
+    if [item[0] for item in observed] != [1]:
+        print("pre-roll trails must exclude interpolated and coasted positions")
         return 1
     print("candidate-free pre-roll validation passed")
     return 0
