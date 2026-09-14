@@ -22,6 +22,14 @@ TRAIL_START = (36, 99, 235)
 TRAIL_END = (239, 68, 68)
 TEXT_COLOR = (255, 255, 255)
 TEXT_BG = (0, 0, 0)
+REVIEW_LABELS = (
+    ("", "Choose label"),
+    ("live_bounce", "Live bounce"),
+    ("dead_bounce", "Dead-ball bounce"),
+    ("racket", "Racket/contact"),
+    ("tracking_artifact", "Tracking artifact"),
+    ("ambiguous", "Ambiguous"),
+)
 
 
 def parse_args():
@@ -257,6 +265,11 @@ def export_review(clips, output):
                 f"<p><strong>{esc(item.get('kind'))}</strong> — {esc(item.get('note'))}</p>"
                 f"<p class=\"coverage\">trail interval: f{start_frame}-f{frame} "
                 f"({esc(interval_source)}); observed coverage: {tracked}/{total} frames ({coverage}%)</p>"
+                "<div class=\"label-controls\">"
+                f"<label>Label <select data-field=\"label\">{''.join(f'<option value=\"{esc(value)}\">{esc(text)}</option>' for value, text in REVIEW_LABELS)}</select></label>"
+                "<label>Confidence <select data-field=\"reviewer_confidence\"><option value=\"\">Choose confidence</option><option>high</option><option>medium</option><option>low</option></select></label>"
+                "<label>Note <input data-field=\"note\" type=\"text\" placeholder=\"optional source-video note\"></label>"
+                "</div>"
                 "<figure class=\"trail\">"
                 f"<img src=\"{esc(rel)}\" alt=\"{esc(clip['label'])} tracked-ball trail ending at frame {frame}\">"
                 "<figcaption>blue = oldest tracked ball, red ring = latest tracked ball; dot size follows tracked bbox size</figcaption>"
@@ -281,6 +294,13 @@ def export_review(clips, output):
     h2 {{ font-size: 17px; margin: 12px 14px 6px; }}
     p {{ margin: 6px 14px 12px; color: #4b5663; }}
     .coverage {{ color: #111827; font-weight: 650; }}
+    .label-controls {{ display: grid; grid-template-columns: 1fr 1fr 2fr; gap: 8px; padding: 0 14px 12px; }}
+    .label-controls label {{ display: grid; gap: 3px; font-size: 12px; color: #374151; font-weight: 650; }}
+    .label-controls select, .label-controls input {{ min-width: 0; border: 1px solid #cbd5e1; border-radius: 4px; padding: 7px; font: inherit; background: #fff; }}
+    .toolbar {{ position: sticky; top: 0; z-index: 2; display: flex; gap: 10px; align-items: center; background: #17202a; color: #fff; padding: 10px 12px; margin: 0 0 18px; border-radius: 6px; }}
+    button {{ border: 0; border-radius: 4px; padding: 8px 12px; font-weight: 700; cursor: pointer; }}
+    #download {{ background: #fbbf24; color: #17202a; }}
+    #progress {{ font-size: 13px; }}
     figure {{ margin: 0; position: relative; background: #111; }}
     figure.trail {{ border-top: 1px solid #111; }}
     img {{ width: 100%; display: block; background: #111; }}
@@ -294,8 +314,41 @@ def export_review(clips, output):
   on the contact frame. Controls with a known previous contact use that full interval; other cards
   fall back to the previous two seconds. The trail deliberately does not use ground-projected court
   side, because airborne balls make that projection unreliable. Read the observed coverage line before
-  trusting missing trail segments.</div>
+  trusting missing trail segments. Labels are evaluation-only and do not change production scoring.</div>
+  <div class="toolbar"><button id="download" type="button">Download labels CSV</button><span id="progress">0 / {len(cards)} labeled</span></div>
   <section class="grid">{''.join(cards)}</section>
+  <script>
+    (() => {{
+      const cards = [...document.querySelectorAll("article")];
+      const progress = document.getElementById("progress");
+      const update = () => {{
+        const count = cards.filter(card => card.querySelector('[data-field="label"]').value).length;
+        progress.textContent = `${{count}} / ${{cards.length}} labeled`;
+      }};
+      cards.forEach(card => card.addEventListener("change", update));
+      cards.forEach(card => card.addEventListener("input", update));
+      document.getElementById("download").addEventListener("click", () => {{
+        const quote = value => `"${{String(value).replaceAll('"', '""')}}"`;
+        const rows = [["frame", "review_scope", "label", "reviewer_confidence", "note"]];
+        cards.forEach(card => {{
+          const match = card.querySelector("h2").textContent.match(/f(\\d+)$/);
+          rows.push([
+            match ? match[1] : "",
+            "candidate_free_reversal",
+            card.querySelector('[data-field="label"]').value,
+            card.querySelector('[data-field="reviewer_confidence"]').value,
+            card.querySelector('[data-field="note"]').value
+          ]);
+        }});
+        const blob = new Blob([rows.map(row => row.map(quote).join(",")).join("\\n") + "\\n"], {{type: "text/csv"}});
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = "candidate_free_bounce_labels.csv";
+        link.click();
+        URL.revokeObjectURL(link.href);
+      }});
+    }})();
+  </script>
 </body>
 </html>
 """
