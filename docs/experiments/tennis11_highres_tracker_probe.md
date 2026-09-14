@@ -48,3 +48,11 @@ correspond to the existing baseline candidates at f967, f992, f1013, f1075,
 and f1103, with only small localization shifts; no candidate-free reversal was
 recovered. This far-court control likewise does not justify changing tracker
 defaults.
+
+A sixth isolated control reran source frames 930-1109 with the same high-
+resolution and low-confidence settings while enabling the existing online ball
+track re-ranker with online learning disabled. It produced five candidates at
+f966, f990, f1012, f1075, and f1101, matching the high-resolution baseline
+within the same small localization shifts. It recovered no candidate-free
+reversal, so the optional re-ranker does not demonstrate a bounce-recall gain
+and remains disabled by default.
