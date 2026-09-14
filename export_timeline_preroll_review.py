@@ -264,7 +264,7 @@ def export_review(clips, output):
                 }
             )
             cards.append(
-                f"<article data-frame=\"{frame}\">"
+                f"<article data-frame=\"{frame}\" data-review-index=\"{card_index}\">"
                 f"<h2>{esc(clip['label'])} f{frame}</h2>"
                 f"<p><strong>{esc(item.get('kind'))}</strong> — {esc(item.get('note'))}</p>"
                 f"<p class=\"review-rank\">Review priority: evidence quality only; rank value {esc(item.get('review_evidence_score', 'n/a'))}</p>"
@@ -305,6 +305,7 @@ def export_review(clips, output):
     .label-controls select, .label-controls input {{ min-width: 0; border: 1px solid #cbd5e1; border-radius: 4px; padding: 7px; font: inherit; background: #fff; }}
     .toolbar {{ position: sticky; top: 0; z-index: 2; display: flex; gap: 10px; align-items: center; background: #17202a; color: #fff; padding: 10px 12px; margin: 0 0 18px; border-radius: 6px; }}
     button {{ border: 0; border-radius: 4px; padding: 8px 12px; font-weight: 700; cursor: pointer; }}
+    .nav {{ background: #dbeafe; color: #17202a; }}
     #download {{ background: #fbbf24; color: #17202a; }}
     #download:disabled {{ background: #9ca3af; color: #e5e7eb; cursor: not-allowed; }}
     #progress {{ font-size: 13px; }}
@@ -322,13 +323,15 @@ def export_review(clips, output):
   fall back to the previous two seconds. The trail deliberately does not use ground-projected court
   side, because airborne balls make that projection unreliable. Read the observed coverage line before
   trusting missing trail segments. Labels are evaluation-only and do not change production scoring.</div>
-  <div class="toolbar"><button id="download" type="button" disabled>Download labels CSV</button><span id="progress">0 / {len(cards)} labeled; complete all labels to export</span></div>
+  <div class="toolbar"><button class="nav" id="previous-unlabeled" type="button">Previous unlabeled</button><button class="nav" id="next-unlabeled" type="button">Next unlabeled</button><button id="download" type="button" disabled>Download labels CSV</button><span id="progress">0 / {len(cards)} labeled; complete all labels to export</span></div>
   <section class="grid">{''.join(cards)}</section>
   <script>
     (() => {{
       const cards = [...document.querySelectorAll("article")];
       const progress = document.getElementById("progress");
       const download = document.getElementById("download");
+      const previousUnlabeled = document.getElementById("previous-unlabeled");
+      const nextUnlabeled = document.getElementById("next-unlabeled");
       const storageKey = "timeline-preroll-review:{esc(os.path.abspath(output))}";
       let saved = {{}};
       try {{ saved = JSON.parse(localStorage.getItem(storageKey) || "{{}}"); }} catch (error) {{}}
@@ -353,6 +356,23 @@ def export_review(clips, output):
         try {{ localStorage.setItem(storageKey, JSON.stringify(values)); }} catch (error) {{}}
       }};
       update();
+      const unlabeledIndex = (direction) => {{
+        const current = cards.findIndex(card => card === document.activeElement?.closest("article"));
+        const start = current < 0 ? (direction > 0 ? -1 : cards.length) : current;
+        for (let step = 1; step <= cards.length; step += 1) {{
+          const index = (start + direction * step + cards.length) % cards.length;
+          if (!cards[index].querySelector('[data-field="label"]').value) return index;
+        }}
+        return -1;
+      }};
+      const focusCard = index => {{
+        if (index < 0) return;
+        const card = cards[index];
+        card.scrollIntoView({{behavior: "smooth", block: "start"}});
+        card.querySelector('[data-field="label"]').focus();
+      }};
+      previousUnlabeled.addEventListener("click", () => focusCard(unlabeledIndex(-1)));
+      nextUnlabeled.addEventListener("click", () => focusCard(unlabeledIndex(1)));
       cards.forEach(card => card.addEventListener("change", update));
       cards.forEach(card => card.addEventListener("input", update));
       download.addEventListener("click", () => {{
