@@ -25,6 +25,23 @@ def load_support(path):
             for row in data.get("events", [])}
 
 
+def load_observed_ball_positions(path):
+    if not path:
+        return {}
+    positions = {}
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            ball = row.get("ball") or {}
+            center = ball.get("center")
+            if not center or ball.get("interpolated") or ball.get("motion_gate") == "coast":
+                continue
+            positions[int(row["frame"])] = (int(round(center[0])), int(round(center[1])))
+    return positions
+
+
 def load_analysis_markers(path):
     if not path:
         return {}
@@ -65,6 +82,8 @@ def main():
     parser.add_argument("--video", required=True)
     parser.add_argument("--reviews", required=True)
     parser.add_argument("--support-json")
+    parser.add_argument("--tracking-jsonl",
+                        help="optional raw tracking JSONL for an image-space evidence trail")
     parser.add_argument("--analysis",
                         help="optional analysis JSON; overlays existing bounce candidates")
     parser.add_argument("--output", required=True)
@@ -72,6 +91,7 @@ def main():
 
     reviews = load_reviews(args.reviews)
     support = load_support(args.support_json)
+    observed_positions = load_observed_ball_positions(args.tracking_jsonl)
     analysis_markers = load_analysis_markers(args.analysis)
     probe = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "v:0",
@@ -98,12 +118,31 @@ def main():
     frame_size = width * height * 3
     frame = 0
     active_analysis_markers = []
+    active_reviews = []
     while data := decoder.stdout.read(frame_size):
         if len(data) != frame_size:
             break
         # The raw stream is already BGR; reshape without another codec pass.
         image = np.frombuffer(data, dtype=np.uint8).reshape((height, width, 3)).copy()
         row = reviews.get(frame)
+        if row:
+            active_reviews.append({"frame": frame, "expires": frame + 15, **row})
+        active_reviews = [item for item in active_reviews if item["expires"] >= frame]
+        if observed_positions and active_reviews:
+            for review in active_reviews:
+                review_frame = int(review["frame"])
+                trail_frames = range(max(0, review_frame - 60), min(frame, review_frame) + 1)
+                trail = [observed_positions[item] for item in trail_frames
+                         if item in observed_positions]
+                for index in range(1, len(trail)):
+                    age = len(trail) - index
+                    color = (255, max(80, 220 - age * 2), 0)
+                    cv2.line(image, trail[index - 1], trail[index], color, 2)
+                if frame == review_frame:
+                    coverage = len(trail)
+                    cv2.putText(image, f"trail observed {coverage}/61 frames",
+                                (28, 134), cv2.FONT_HERSHEY_SIMPLEX, 0.58,
+                                (255, 220, 80), 2, cv2.LINE_AA)
         for marker in analysis_markers.get(frame, []):
             active_analysis_markers.append({"expires": frame + 45, **marker})
         active_analysis_markers = [
