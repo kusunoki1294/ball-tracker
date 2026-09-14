@@ -453,6 +453,23 @@ def main():
         else:
             draw_text(frame, "Shot analysis", (34, 146), scale=0.54, color=(220, 230, 240))
 
+        if args.review_all_candidates:
+            legend_x = max(470, width - 650)
+            cv2.rectangle(frame, (legend_x, 58), (width - 18, 156), PANEL_COLOR, -1)
+            cv2.rectangle(frame, (legend_x, 58), (width - 18, 156), (90, 100, 110), 1)
+            draw_text(frame, "BOUNCE REVIEW", (legend_x + 16, 86), scale=0.62,
+                      color=(255, 255, 255), thickness=2)
+            draw_text(
+                frame,
+                f"scoring-visible: {visible_bounce_count}  review-only: {hidden_bounce_count}",
+                (legend_x + 16, 112), scale=0.46, color=(220, 230, 240), thickness=1,
+            )
+            draw_text(
+                frame,
+                "solid red = eligible  hollow red = provisional  other = review-only",
+                (legend_x + 16, 138), scale=0.38, color=(220, 230, 240), thickness=1,
+            )
+
         for index, item in enumerate(active_serve_labels):
             draw_text(frame, item["label"], (34, 188 + (index * 32)), scale=0.95, color=FAULT_COLOR, thickness=3)
 
