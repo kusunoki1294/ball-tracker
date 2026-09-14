@@ -331,7 +331,7 @@ def export_review(clips, output):
   fall back to the previous two seconds. The trail deliberately does not use ground-projected court
   side, because airborne balls make that projection unreliable. Read the observed coverage line before
   trusting missing trail segments. Labels are evaluation-only and do not change production scoring.</div>
-  <div class="toolbar"><button class="nav" id="previous-unlabeled" type="button">Previous unlabeled</button><button class="nav" id="next-unlabeled" type="button">Next unlabeled</button><button id="download" type="button" disabled>Download labels CSV</button><span id="progress">0 / {len(cards)} labeled; complete all labels to export</span></div>
+  <div class="toolbar"><button class="nav" id="previous-unlabeled" type="button">Previous unlabeled</button><button class="nav" id="next-unlabeled" type="button">Next unlabeled</button><button id="download" type="button" disabled>Download labels CSV</button><span id="progress">0 / {len(cards)} reviewed; complete labels and confidence to export</span></div>
   <video id="source-video" controls preload="metadata" src="{esc(source_video)}"></video>
   <section class="grid">{''.join(cards)}</section>
   <script>
@@ -352,11 +352,14 @@ def export_review(clips, output):
         card.querySelector('[data-field="note"]').value = values.note || "";
       }});
       const update = () => {{
-        const count = cards.filter(card => card.querySelector('[data-field="label"]').value).length;
+        const count = cards.filter(card =>
+          card.querySelector('[data-field="label"]').value
+          && card.querySelector('[data-field="reviewer_confidence"]').value
+        ).length;
         download.disabled = count !== cards.length;
         progress.textContent = count === cards.length
-          ? `${{count}} / ${{cards.length}} labeled; ready to export`
-          : `${{count}} / ${{cards.length}} labeled; complete all labels to export`;
+          ? `${{count}} / ${{cards.length}} reviewed; ready to export`
+          : `${{count}} / ${{cards.length}} reviewed; complete labels and confidence to export`;
         const values = {{}};
         cards.forEach(card => values[card.dataset.frame] = {{
           label: card.querySelector('[data-field="label"]').value,
