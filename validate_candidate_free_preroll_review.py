@@ -4,7 +4,7 @@ import csv
 import inspect
 import tempfile
 
-from export_candidate_free_preroll_review import load_labels, read_events
+from export_candidate_free_preroll_review import load_labels, read_events, validate_label_frames
 from export_timeline_preroll_review import export_review, tracked_points
 
 
@@ -63,6 +63,13 @@ def main():
         else:
             print("pre-roll label preload must reject incompatible review scope")
             return 1
+    try:
+        validate_label_frames({"999": {"label": "ambiguous"}}, [{"frame": 10}])
+    except ValueError:
+        pass
+    else:
+        print("pre-roll label preload must reject frames outside the review population")
+        return 1
     rows = {
         1: {"ball": {"center": [10, 10], "bbox": [8, 8, 12, 12]}},
         2: {"ball": {"center": [20, 20], "interpolated": True}},

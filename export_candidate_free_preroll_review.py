@@ -66,6 +66,17 @@ def load_labels(path):
         return labels
 
 
+def validate_label_frames(labels, events):
+    """Reject labels that cannot be applied to this review population."""
+    event_frames = {str(event["frame"]) for event in events}
+    unknown = sorted(set(labels) - event_frames, key=int)
+    if unknown:
+        raise ValueError(
+            "labels CSV contains frame(s) outside the candidate-free review population: "
+            + ", ".join(unknown)
+        )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--video", required=True)
@@ -80,6 +91,7 @@ def main():
     events = read_events(args.reviews)
     diagnostics = load_diagnostics(args.diagnostics)
     labels = load_labels(args.labels)
+    validate_label_frames(labels, events)
     for event in events:
         event.update(labels.get(str(event["frame"]), {}))
         context = diagnostics.get(str(event["frame"]))
