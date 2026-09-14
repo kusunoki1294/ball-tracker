@@ -44,3 +44,12 @@ does not establish a ground bounce. The next recall experiment needs either
 independent source-video labels or a validated physical cue such as a rebound
 trajectory, with explicit abstention when the track is ambiguous. This output
 remains review-only and must not be used as bounce ground truth.
+
+## Detector parameter check
+
+An offline sweep over `81` combinations of `max_gap`, `min_samples`, fitting
+`window`, and `max_join_error_frames` was also run against the existing reviewed
+detector candidates. The best result stayed at `11/11` known `live_bounce`
+labels with zero additional labeled mismatches. No parameter-only variant
+recovered another verified live bounce, so the production defaults were left
+unchanged.
