@@ -432,7 +432,11 @@ cards and a matching blank label sheet:
       --video yoloVids/inputs/tennis11_game1.mp4 \
       --jsonl yoloVids/outputs/tennis11/ai11.1.jsonl \
       --reviews yoloVids/outputs/tennis11/track_reversal_review.csv \
+      --diagnostics yoloVids/outputs/tennis11/candidate_free_reversal_diagnostics.json \
       --output yoloVids/outputs/tennis11/tennis11_candidate_free_bounce_review.html
+
+The optional diagnostics input adds nearby-player and nearby-racket context to
+each card for review prioritization only; it never labels or promotes a bounce.
 
     .venv/bin/python export_bounce_recall_template.py \
       --input yoloVids/outputs/tennis11/track_reversal_review.csv \
