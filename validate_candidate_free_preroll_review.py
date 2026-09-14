@@ -53,6 +53,16 @@ def main():
         else:
             print("pre-roll label preload must reject duplicate frames")
             return 1
+    with tempfile.NamedTemporaryFile(mode="w", newline="", suffix=".csv") as labels_handle:
+        labels_handle.write("frame,review_scope,label,reviewer_confidence,note\n10,wrong_scope,ambiguous,low,wrong\n")
+        labels_handle.flush()
+        try:
+            load_labels(labels_handle.name)
+        except ValueError:
+            pass
+        else:
+            print("pre-roll label preload must reject incompatible review scope")
+            return 1
     rows = {
         1: {"ball": {"center": [10, 10], "bbox": [8, 8, 12, 12]}},
         2: {"ball": {"center": [20, 20], "interpolated": True}},

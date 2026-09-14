@@ -51,6 +51,11 @@ def load_labels(path):
         for row in rows:
             frame = (row.get("frame") or "").strip()
             if frame:
+                scope = (row.get("review_scope") or "").strip()
+                if scope and scope != "candidate_free_reversal":
+                    raise ValueError(
+                        f"labels CSV frame {frame} has incompatible review_scope {scope!r}"
+                    )
                 if frame in labels:
                     raise ValueError(f"labels CSV contains duplicate frame {frame}")
                 labels[frame] = {
