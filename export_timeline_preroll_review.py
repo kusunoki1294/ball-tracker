@@ -332,7 +332,7 @@ def export_review(clips, output):
   fall back to the previous two seconds. The trail deliberately does not use ground-projected court
   side, because airborne balls make that projection unreliable. Read the observed coverage line before
   trusting missing trail segments. Labels are evaluation-only and do not change production scoring.</div>
-  <div class="toolbar"><button class="nav" id="previous-unlabeled" type="button">Previous unlabeled</button><button class="nav" id="next-unlabeled" type="button">Next unlabeled</button><button id="download" type="button" disabled>Download labels CSV</button><span id="progress">0 / {len(cards)} reviewed; complete labels and confidence to export</span></div>
+  <div class="toolbar"><button class="nav" id="previous-unlabeled" type="button">Previous incomplete</button><button class="nav" id="next-unlabeled" type="button">Next incomplete</button><button id="download" type="button" disabled>Download labels CSV</button><span id="progress">0 / {len(cards)} reviewed; complete labels and confidence to export</span></div>
   <video id="source-video" controls preload="metadata" src="{esc(source_video)}"></video>
   <section class="grid">{''.join(cards)}</section>
   <script>
@@ -370,12 +370,14 @@ def export_review(clips, output):
         try {{ localStorage.setItem(storageKey, JSON.stringify(values)); }} catch (error) {{}}
       }};
       update();
-      const unlabeledIndex = (direction) => {{
+      const incompleteIndex = (direction) => {{
         const current = cards.findIndex(card => card === document.activeElement?.closest("article"));
         const start = current < 0 ? (direction > 0 ? -1 : cards.length) : current;
         for (let step = 1; step <= cards.length; step += 1) {{
           const index = (start + direction * step + cards.length) % cards.length;
-          if (!cards[index].querySelector('[data-field="label"]').value) return index;
+          const card = cards[index];
+          if (!card.querySelector('[data-field="label"]').value
+              || !card.querySelector('[data-field="reviewer_confidence"]').value) return index;
         }}
         return -1;
       }};
@@ -385,8 +387,8 @@ def export_review(clips, output):
         card.scrollIntoView({{behavior: "smooth", block: "start"}});
         card.querySelector('[data-field="label"]').focus();
       }};
-      previousUnlabeled.addEventListener("click", () => focusCard(unlabeledIndex(-1)));
-      nextUnlabeled.addEventListener("click", () => focusCard(unlabeledIndex(1)));
+      previousUnlabeled.addEventListener("click", () => focusCard(incompleteIndex(-1)));
+      nextUnlabeled.addEventListener("click", () => focusCard(incompleteIndex(1)));
       const playAtFrame = button => {{
         const seek = () => {{
           sourceVideo.currentTime = (Number(button.dataset.frame) - 1) / 30;
