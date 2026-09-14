@@ -469,6 +469,17 @@ def main():
                 "solid red = eligible  hollow red = provisional  other = review-only",
                 (legend_x + 16, 138), scale=0.38, color=(220, 230, 240), thickness=1,
             )
+        else:
+            legend_x = max(470, width - 650)
+            cv2.rectangle(frame, (legend_x, 58), (width - 18, 124), PANEL_COLOR, -1)
+            cv2.rectangle(frame, (legend_x, 58), (width - 18, 124), (90, 100, 110), 1)
+            draw_text(frame, "BOUNCE STATUS", (legend_x + 16, 86), scale=0.62,
+                      color=(255, 255, 255), thickness=2)
+            draw_text(
+                frame,
+                f"shown: {visible_bounce_count} scoring-visible  |  withheld: {hidden_bounce_count} review-only",
+                (legend_x + 16, 110), scale=0.44, color=(220, 230, 240), thickness=1,
+            )
 
         for index, item in enumerate(active_serve_labels):
             draw_text(frame, item["label"], (34, 188 + (index * 32)), scale=0.95, color=FAULT_COLOR, thickness=3)
