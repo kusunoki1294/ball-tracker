@@ -1857,6 +1857,17 @@ def local_extremum_strength(previous_points, point, next_points):
     return {"strength": top_strength, "shape": "local_top"}
 
 
+def observed_ball_rows(rows):
+    """Return rows with visual ball evidence, excluding tracker-held guesses."""
+    return [
+        row for row in rows
+        if row.get("ball")
+        and row["ball"].get("center")
+        and not row["ball"].get("interpolated")
+        and row["ball"].get("motion_gate") != "coast"
+    ]
+
+
 def find_missed_bounce_candidates(
     rows,
     point_ranges,
@@ -1871,13 +1882,7 @@ def find_missed_bounce_candidates(
     # A held position is useful for continuity, but it is not new visual
     # evidence. Candidate recovery must not turn tracker coasting into a
     # trajectory reversal and then present it as a missed bounce.
-    rows_with_ball = [
-        row for row in rows
-        if row.get("ball")
-        and row["ball"].get("center")
-        and not row["ball"].get("interpolated")
-        and row["ball"].get("motion_gate") != "coast"
-    ]
+    rows_with_ball = observed_ball_rows(rows)
     bounces_by_point = {}
     for bounce in raw_bounces:
         bounces_by_point.setdefault(bounce.get("point_index"), []).append(bounce)

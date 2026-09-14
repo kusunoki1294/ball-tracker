@@ -21,6 +21,7 @@ CORE_CHECKS = (
     ("bounce labels", ("eval_bounce_detect.py", "--check-labels")),
     ("bounce recall evaluator", ("validate_bounce_recall_eval.py",)),
     ("bounce recall template", ("validate_bounce_recall_template.py",)),
+    ("bounce recovery", ("validate_bounce_recovery.py",)),
     ("reversal diagnostics", ("validate_reversal_gate_diagnostics.py",)),
     ("candidate-free pre-roll review", ("validate_candidate_free_preroll_review.py",)),
     ("bounce known limits", ("validate_bounce_known_limits.py",)),

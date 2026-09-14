@@ -238,7 +238,11 @@ def export_review(clips, output):
     for clip in clips:
         jobs = []
         by_frame = read_tracking_by_frame(clip.get("jsonl"))
-        for item in clip["items"]:
+        for item in sorted(
+            clip["items"],
+            key=lambda item: float(item.get("review_evidence_score", 0)),
+            reverse=True,
+        ):
             card_index += 1
             frame = int(item["frame"])
             interval_source = "fixed 2-second window"
@@ -263,6 +267,7 @@ def export_review(clips, output):
                 f"<article data-frame=\"{frame}\">"
                 f"<h2>{esc(clip['label'])} f{frame}</h2>"
                 f"<p><strong>{esc(item.get('kind'))}</strong> — {esc(item.get('note'))}</p>"
+                f"<p class=\"review-rank\">Review priority: evidence quality only; rank value {esc(item.get('review_evidence_score', 'n/a'))}</p>"
                 f"<p class=\"coverage\">trail interval: f{start_frame}-f{frame} "
                 f"({esc(interval_source)}); observed coverage: {tracked}/{total} frames ({coverage}%)</p>"
                 "<div class=\"label-controls\">"
@@ -293,6 +298,7 @@ def export_review(clips, output):
     article {{ background: #fff; border: 1px solid #d8dee6; border-radius: 8px; overflow: hidden; }}
     h2 {{ font-size: 17px; margin: 12px 14px 6px; }}
     p {{ margin: 6px 14px 12px; color: #4b5663; }}
+    .review-rank {{ color: #6b7280; font-size: 12px; }}
     .coverage {{ color: #111827; font-weight: 650; }}
     .label-controls {{ display: grid; grid-template-columns: 1fr 1fr 2fr; gap: 8px; padding: 0 14px 12px; }}
     .label-controls label {{ display: grid; gap: 3px; font-size: 12px; color: #374151; font-weight: 650; }}

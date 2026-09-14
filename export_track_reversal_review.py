@@ -86,6 +86,14 @@ def reversals(rows, candidate_frames=(), cluster_frames=6,
         nearest = min((abs(item["frame"] - frame) for frame in candidates), default=None)
         item["near_existing_candidate"] = nearest is not None and nearest <= 4
         item["nearest_candidate_delta_frames"] = nearest if nearest is not None and nearest <= 4 else ""
+        # Review ordering only: this measures how inspectable the reversal is
+        # from the observed track, not whether it is a bounce.
+        item["review_evidence_score"] = round(
+            item["direction_change_px_frame"]
+            / max(1.0, item["fit_residual_px"])
+            * min(item["tracked_samples_before"], item["tracked_samples_after"]) / 10.0,
+            3,
+        )
         item["status"] = "review_required"
     return grouped
 
@@ -109,7 +117,7 @@ def main():
         "nearest_candidate_delta_frames",
         "direction_change_px_frame", "vy_before_px_frame", "vy_after_px_frame",
         "fit_residual_px", "tracked_samples_before", "tracked_samples_after",
-        "status",
+        "review_evidence_score", "status",
     ]
     with open(args.output_csv, "w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)

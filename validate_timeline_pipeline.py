@@ -312,7 +312,7 @@ def validate_outputs(output_dir):
     else:
         with open(preroll_path, "r", encoding="utf-8") as handle:
             preroll = handle.read()
-        if "image-space tracked-ball trail" not in preroll or "tracked coverage" not in preroll:
+        if "image-space tracked-ball trail" not in preroll or "observed coverage" not in preroll:
             errors.append("pre-roll review must explain image-space trail and coverage semantics")
         if "trail interval: f635-f786" not in preroll:
             errors.append("pre-roll f786 control must use the previous-contact interval")

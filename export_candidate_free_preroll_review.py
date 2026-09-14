@@ -24,11 +24,13 @@ def read_events(path):
                 "note": (
                     f"direction change {row.get('direction_change_px_frame', '?')} px/frame; "
                     f"fit residual {row.get('fit_residual_px', '?')} px; "
-                    "review only, not a bounce label"
+                    f"evidence-review score {row.get('review_evidence_score', '?')}; "
+                    "review only, not a bounce likelihood"
                 ),
+                "review_evidence_score": float(row.get("review_evidence_score") or 0),
                 "trail_start_frame": max(1, frame - 60),
             })
-    return events
+    return sorted(events, key=lambda item: item["review_evidence_score"], reverse=True)
 
 
 def main():
