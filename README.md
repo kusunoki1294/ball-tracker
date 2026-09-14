@@ -358,9 +358,11 @@ and measuring the discontinuity, which tolerates dropped frames.
     python bounce_detect.py --jsonl <tracking.jsonl> --court-calib-file <calib.json>
     python eval_bounce_detect.py --verbose [--review-csv out.csv]
 
-Measured: tennis11 game 1 goes from 10 bounces to 44, serve bounces from 2/7 to
-6/7, and point 5 from zero bounces to one. tennis9 recall is 20/23 against its
-reviewed known-good set.
+Measured: tennis11 game 1 goes from 10 live-tracker events to 44 offline
+trajectory candidates. The corrected labels identify 11/44 as live in-play
+bounces; the other candidates are real ball events of different types or
+ambiguous. Serve contacts are found at 6/7 loose and 5/7 strict. tennis9 recall
+is 20/23 against its reviewed known-good set.
 
 Two things it deliberately does NOT do:
 - It does not reject racket contacts. In image space they are not reliably
@@ -371,7 +373,7 @@ Two things it deliberately does NOT do:
   balls land). Contacts are FLAGGED via `near_player` and graded, never dropped.
 - It does not claim unqualified precision. tennis11 game 1 now has hand labels in
   `labels/tennis11_game1_bounce_labels.csv`: 41/44 detections are real ball
-  events, but only 12/44 are live in-play bounces. The useful contract is
+  events, but only 11/44 are live in-play bounces. The useful contract is
   contextual: `rally_scoring_eligible` contains no labelled racket contacts or
   dead balls on that clip, while serve adjudication uses its own contact-anchored
   landing logic.
@@ -552,8 +554,9 @@ consumer that takes the first bounce after a strike will judge the serve on it.
 That check found a live instance in the serve path.
 
 Ball-track recall is the bottleneck for full automation
-- Offline bounce detection substantially improves recall on the existing logs:
-  tennis11 game 1 now finds 44 bounces instead of the live tracker's 10, and
+- Offline trajectory analysis substantially expands the review population on
+  the existing logs: tennis11 game 1 now finds 44 candidates instead of the
+  live tracker's 10, and
   serve landings are found at 6/7 loose, 5/7 strict. The remaining failures are
   mostly not downstream logic failures; they happen where the input ball track
   loses the ball at the critical instant.
