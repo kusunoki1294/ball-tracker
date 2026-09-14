@@ -4,7 +4,7 @@ import csv
 import inspect
 import tempfile
 
-from export_candidate_free_preroll_review import read_events
+from export_candidate_free_preroll_review import load_labels, read_events
 from export_timeline_preroll_review import export_review, tracked_points
 
 
@@ -43,6 +43,16 @@ def main():
     if events[0]["review_evidence_score"] <= 0:
         print("pre-roll review must expose a positive evidence-only rank")
         return 1
+    with tempfile.NamedTemporaryFile(mode="w", newline="", suffix=".csv") as labels_handle:
+        labels_handle.write("frame,label,reviewer_confidence,note\n10,ambiguous,low,one\n10,racket,high,two\n")
+        labels_handle.flush()
+        try:
+            load_labels(labels_handle.name)
+        except ValueError:
+            pass
+        else:
+            print("pre-roll label preload must reject duplicate frames")
+            return 1
     rows = {
         1: {"ball": {"center": [10, 10], "bbox": [8, 8, 12, 12]}},
         2: {"ball": {"center": [20, 20], "interpolated": True}},

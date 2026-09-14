@@ -51,6 +51,8 @@ def load_labels(path):
         for row in rows:
             frame = (row.get("frame") or "").strip()
             if frame:
+                if frame in labels:
+                    raise ValueError(f"labels CSV contains duplicate frame {frame}")
                 labels[frame] = {
                     "label": row.get("label", ""),
                     "reviewer_confidence": row.get("reviewer_confidence", ""),
