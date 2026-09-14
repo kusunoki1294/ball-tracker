@@ -235,7 +235,12 @@ def export_review(clips, output):
 
     cards = []
     card_index = 0
+    source_video = None
     for clip in clips:
+        if source_video is None:
+            source_video = os.path.relpath(
+                os.path.abspath(clip["video"]), os.path.dirname(os.path.abspath(output))
+            )
         jobs = []
         by_frame = read_tracking_by_frame(clip.get("jsonl"))
         for item in sorted(
@@ -268,6 +273,7 @@ def export_review(clips, output):
                 f"<h2>{esc(clip['label'])} f{frame}</h2>"
                 f"<p><strong>{esc(item.get('kind'))}</strong> — {esc(item.get('note'))}</p>"
                 f"<p class=\"review-rank\">Review priority: evidence quality only; rank value {esc(item.get('review_evidence_score', 'n/a'))}</p>"
+                f"<button class=\"jump-to-frame\" type=\"button\" data-frame=\"{frame}\">Play source at frame {frame}</button>"
                 f"<p class=\"coverage\">trail interval: f{start_frame}-f{frame} "
                 f"({esc(interval_source)}); observed coverage: {tracked}/{total} frames ({coverage}%)</p>"
                 "<div class=\"label-controls\">"
@@ -299,6 +305,8 @@ def export_review(clips, output):
     h2 {{ font-size: 17px; margin: 12px 14px 6px; }}
     p {{ margin: 6px 14px 12px; color: #4b5663; }}
     .review-rank {{ color: #6b7280; font-size: 12px; }}
+    .jump-to-frame {{ margin: 0 14px 12px; background: #e2e8f0; color: #17202a; }}
+    #source-video {{ display: block; width: min(100%, 1060px); margin: 0 0 18px; background: #111; }}
     .coverage {{ color: #111827; font-weight: 650; }}
     .label-controls {{ display: grid; grid-template-columns: 1fr 1fr 2fr; gap: 8px; padding: 0 14px 12px; }}
     .label-controls label {{ display: grid; gap: 3px; font-size: 12px; color: #374151; font-weight: 650; }}
@@ -324,6 +332,7 @@ def export_review(clips, output):
   side, because airborne balls make that projection unreliable. Read the observed coverage line before
   trusting missing trail segments. Labels are evaluation-only and do not change production scoring.</div>
   <div class="toolbar"><button class="nav" id="previous-unlabeled" type="button">Previous unlabeled</button><button class="nav" id="next-unlabeled" type="button">Next unlabeled</button><button id="download" type="button" disabled>Download labels CSV</button><span id="progress">0 / {len(cards)} labeled; complete all labels to export</span></div>
+  <video id="source-video" controls preload="metadata" src="{esc(source_video)}"></video>
   <section class="grid">{''.join(cards)}</section>
   <script>
     (() => {{
@@ -332,6 +341,7 @@ def export_review(clips, output):
       const download = document.getElementById("download");
       const previousUnlabeled = document.getElementById("previous-unlabeled");
       const nextUnlabeled = document.getElementById("next-unlabeled");
+      const sourceVideo = document.getElementById("source-video");
       const storageKey = "timeline-preroll-review:{esc(os.path.abspath(output))}";
       let saved = {{}};
       try {{ saved = JSON.parse(localStorage.getItem(storageKey) || "{{}}"); }} catch (error) {{}}
@@ -373,6 +383,10 @@ def export_review(clips, output):
       }};
       previousUnlabeled.addEventListener("click", () => focusCard(unlabeledIndex(-1)));
       nextUnlabeled.addEventListener("click", () => focusCard(unlabeledIndex(1)));
+      cards.forEach(card => card.querySelector(".jump-to-frame").addEventListener("click", () => {{
+        sourceVideo.currentTime = (Number(card.dataset.frame) - 1) / 30;
+        sourceVideo.play().catch(() => {{}});
+      }}));
       cards.forEach(card => card.addEventListener("change", update));
       cards.forEach(card => card.addEventListener("input", update));
       download.addEventListener("click", () => {{
