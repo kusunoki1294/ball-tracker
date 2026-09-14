@@ -260,7 +260,7 @@ def export_review(clips, output):
                 }
             )
             cards.append(
-                "<article>"
+                f"<article data-frame=\"{frame}\">"
                 f"<h2>{esc(clip['label'])} f{frame}</h2>"
                 f"<p><strong>{esc(item.get('kind'))}</strong> — {esc(item.get('note'))}</p>"
                 f"<p class=\"coverage\">trail interval: f{start_frame}-f{frame} "
@@ -300,6 +300,7 @@ def export_review(clips, output):
     .toolbar {{ position: sticky; top: 0; z-index: 2; display: flex; gap: 10px; align-items: center; background: #17202a; color: #fff; padding: 10px 12px; margin: 0 0 18px; border-radius: 6px; }}
     button {{ border: 0; border-radius: 4px; padding: 8px 12px; font-weight: 700; cursor: pointer; }}
     #download {{ background: #fbbf24; color: #17202a; }}
+    #download:disabled {{ background: #9ca3af; color: #e5e7eb; cursor: not-allowed; }}
     #progress {{ font-size: 13px; }}
     figure {{ margin: 0; position: relative; background: #111; }}
     figure.trail {{ border-top: 1px solid #111; }}
@@ -315,25 +316,45 @@ def export_review(clips, output):
   fall back to the previous two seconds. The trail deliberately does not use ground-projected court
   side, because airborne balls make that projection unreliable. Read the observed coverage line before
   trusting missing trail segments. Labels are evaluation-only and do not change production scoring.</div>
-  <div class="toolbar"><button id="download" type="button">Download labels CSV</button><span id="progress">0 / {len(cards)} labeled</span></div>
+  <div class="toolbar"><button id="download" type="button" disabled>Download labels CSV</button><span id="progress">0 / {len(cards)} labeled; complete all labels to export</span></div>
   <section class="grid">{''.join(cards)}</section>
   <script>
     (() => {{
       const cards = [...document.querySelectorAll("article")];
       const progress = document.getElementById("progress");
+      const download = document.getElementById("download");
+      const storageKey = "timeline-preroll-review:{esc(os.path.abspath(output))}";
+      let saved = {{}};
+      try {{ saved = JSON.parse(localStorage.getItem(storageKey) || "{{}}"); }} catch (error) {{}}
+      cards.forEach(card => {{
+        const values = saved[card.dataset.frame] || {{}};
+        card.querySelector('[data-field="label"]').value = values.label || "";
+        card.querySelector('[data-field="reviewer_confidence"]').value = values.reviewer_confidence || "";
+        card.querySelector('[data-field="note"]').value = values.note || "";
+      }});
       const update = () => {{
         const count = cards.filter(card => card.querySelector('[data-field="label"]').value).length;
-        progress.textContent = `${{count}} / ${{cards.length}} labeled`;
+        download.disabled = count !== cards.length;
+        progress.textContent = count === cards.length
+          ? `${{count}} / ${{cards.length}} labeled; ready to export`
+          : `${{count}} / ${{cards.length}} labeled; complete all labels to export`;
+        const values = {{}};
+        cards.forEach(card => values[card.dataset.frame] = {{
+          label: card.querySelector('[data-field="label"]').value,
+          reviewer_confidence: card.querySelector('[data-field="reviewer_confidence"]').value,
+          note: card.querySelector('[data-field="note"]').value
+        }});
+        try {{ localStorage.setItem(storageKey, JSON.stringify(values)); }} catch (error) {{}}
       }};
+      update();
       cards.forEach(card => card.addEventListener("change", update));
       cards.forEach(card => card.addEventListener("input", update));
-      document.getElementById("download").addEventListener("click", () => {{
+      download.addEventListener("click", () => {{
         const quote = value => `"${{String(value).replaceAll('"', '""')}}"`;
         const rows = [["frame", "review_scope", "label", "reviewer_confidence", "note"]];
         cards.forEach(card => {{
-          const match = card.querySelector("h2").textContent.match(/f(\\d+)$/);
           rows.push([
-            match ? match[1] : "",
+            card.dataset.frame,
             "candidate_free_reversal",
             card.querySelector('[data-field="label"]').value,
             card.querySelector('[data-field="reviewer_confidence"]').value,
