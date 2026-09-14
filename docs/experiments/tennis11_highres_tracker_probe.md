@@ -33,3 +33,10 @@ candidate-free reversal events. It tracked 148 of 180 frames with a ball and
 produced four bounce candidates. None was a new candidate-free reversal, so the
 larger inference size and lower threshold still did not demonstrate a recall
 gain. This probe also remains isolated from the shipped log and analysis.
+
+A fourth targeted probe covered source frames 2070-2249 with `--imgsz 1280
+--far-ball-imgsz 1920 --ball-conf 0.03 --far-ball-conf 0.03`. It tracked 171 of
+180 frames with a ball and produced candidates at f2158 and f2246. The shipped
+log already has nearby candidates at f2146, f2179, and f2253; no new verified
+bounce was recovered. Better tracking coverage in this window therefore did
+not translate into a demonstrated bounce-recall gain.
