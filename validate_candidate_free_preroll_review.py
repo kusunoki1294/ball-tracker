@@ -13,6 +13,11 @@ def main():
     if "reviewer_confidence" not in renderer_source or "complete labels and confidence" not in renderer_source:
         print("review export must require reviewer confidence")
         return 1
+    import_source = inspect.getsource(__import__(
+        "export_candidate_free_preroll_review", fromlist=["main"]))
+    if "context only; not a bounce label" not in import_source:
+        print("diagnostic context must remain explicitly non-classifying")
+        return 1
     with tempfile.NamedTemporaryFile(mode="w", newline="", suffix=".csv") as handle:
         writer = csv.DictWriter(handle, fieldnames=[
             "frame", "near_existing_candidate", "status",
