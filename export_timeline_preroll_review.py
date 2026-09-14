@@ -237,10 +237,11 @@ def export_review(clips, output):
     card_index = 0
     source_video = None
     for clip in clips:
+        clip_video_rel = os.path.relpath(
+            os.path.abspath(clip["video"]), os.path.dirname(os.path.abspath(output))
+        )
         if source_video is None:
-            source_video = os.path.relpath(
-                os.path.abspath(clip["video"]), os.path.dirname(os.path.abspath(output))
-            )
+            source_video = clip_video_rel
         jobs = []
         by_frame = read_tracking_by_frame(clip.get("jsonl"))
         for item in sorted(
@@ -273,7 +274,7 @@ def export_review(clips, output):
                 f"<h2>{esc(clip['label'])} f{frame}</h2>"
                 f"<p><strong>{esc(item.get('kind'))}</strong> — {esc(item.get('note'))}</p>"
                 f"<p class=\"review-rank\">Review priority: evidence quality only; rank value {esc(item.get('review_evidence_score', 'n/a'))}</p>"
-                f"<button class=\"jump-to-frame\" type=\"button\" data-frame=\"{frame}\">Play source at frame {frame}</button>"
+                f"<button class=\"jump-to-frame\" type=\"button\" data-frame=\"{frame}\" data-video-src=\"{esc(clip_video_rel)}\">Play source at frame {frame}</button>"
                 f"<p class=\"coverage\">trail interval: f{start_frame}-f{frame} "
                 f"({esc(interval_source)}); observed coverage: {tracked}/{total} frames ({coverage}%)</p>"
                 "<div class=\"label-controls\">"
@@ -386,9 +387,21 @@ def export_review(clips, output):
       }};
       previousUnlabeled.addEventListener("click", () => focusCard(unlabeledIndex(-1)));
       nextUnlabeled.addEventListener("click", () => focusCard(unlabeledIndex(1)));
-      cards.forEach(card => card.querySelector(".jump-to-frame").addEventListener("click", () => {{
-        sourceVideo.currentTime = (Number(card.dataset.frame) - 1) / 30;
-        sourceVideo.play().catch(() => {{}});
+      const playAtFrame = button => {{
+        const seek = () => {{
+          sourceVideo.currentTime = (Number(button.dataset.frame) - 1) / 30;
+          sourceVideo.play().catch(() => {{}});
+        }};
+        if (sourceVideo.getAttribute("src") !== button.dataset.videoSrc) {{
+          sourceVideo.src = button.dataset.videoSrc;
+          sourceVideo.addEventListener("loadedmetadata", seek, {{once: true}});
+          sourceVideo.load();
+        }} else {{
+          seek();
+        }}
+      }};
+      cards.forEach(card => card.querySelector(".jump-to-frame").addEventListener("click", event => {{
+        playAtFrame(event.currentTarget);
       }}));
       cards.forEach(card => card.addEventListener("change", update));
       cards.forEach(card => card.addEventListener("input", update));
