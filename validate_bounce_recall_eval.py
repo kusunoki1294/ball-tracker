@@ -57,6 +57,24 @@ def main():
         pass
     else:
         errors.append("overlapping frame populations must fail before metrics are emitted")
+    try:
+        evaluate([
+            {"frame": "1", "label": "live_bounce"},
+            {"frame": "1", "label": "racket"},
+        ], candidate_free)
+    except ValueError:
+        pass
+    else:
+        errors.append("duplicate detector frames must fail before metrics are emitted")
+    try:
+        evaluate(detector, [
+            {"frame": "4", "label": "live_bounce", "review_scope": "candidate_free_reversal", "reviewer_confidence": "high"},
+            {"frame": "4", "label": "ambiguous", "review_scope": "candidate_free_reversal", "reviewer_confidence": "medium"},
+        ])
+    except ValueError:
+        pass
+    else:
+        errors.append("duplicate candidate-free frames must fail before metrics are emitted")
 
     if errors:
         for error in errors:
