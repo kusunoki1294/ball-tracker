@@ -10,6 +10,12 @@ import json
 import math
 
 
+# Triage bands only: these counts prioritize source-video review and never
+# classify a reversal as a bounce or non-bounce.
+PLAYER_REVIEW_DISTANCE_PX = 60.0
+RACKET_REVIEW_DISTANCE_PX = 100.0
+
+
 def load_reviews(path):
     with open(path, newline="") as handle:
         return [row for row in csv.DictReader(handle)
@@ -108,6 +114,26 @@ def main():
         "not_bounce_truth": True,
         "status": "review_required",
         "note": "Context at a reversal is not proof of which bounce-detector gate rejected it.",
+        "review_triage": {
+            "player_near_event_count": sum(
+                any(
+                    (details.get("distance_px") is not None
+                     and details["distance_px"] <= PLAYER_REVIEW_DISTANCE_PX)
+                    for details in event["scene_context"]["nearest_player"].values()
+                )
+                for event in output
+            ),
+            "racket_near_event_count": sum(
+                event["scene_context"]["nearest_racket_distance_px"] is not None
+                and event["scene_context"]["nearest_racket_distance_px"] <= RACKET_REVIEW_DISTANCE_PX
+                for event in output
+            ),
+            "thresholds_px": {
+                "player": PLAYER_REVIEW_DISTANCE_PX,
+                "racket": RACKET_REVIEW_DISTANCE_PX,
+            },
+            "interpretation": "context bands for review priority only; not labels or gates",
+        },
         "events": output,
     }
     with open(args.output_json, "w") as handle:
