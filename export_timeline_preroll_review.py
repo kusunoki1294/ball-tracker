@@ -30,6 +30,12 @@ REVIEW_LABELS = (
     ("tracking_artifact", "Tracking artifact"),
     ("ambiguous", "Ambiguous"),
 )
+REVIEW_CONFIDENCES = (
+    ("", "Choose confidence"),
+    ("high", "high"),
+    ("medium", "medium"),
+    ("low", "low"),
+)
 
 
 def parse_args():
@@ -140,6 +146,14 @@ def trail_color(index, total):
     return tuple(
         int(round(TRAIL_START[channel] * (1.0 - ratio) + TRAIL_END[channel] * ratio))
         for channel in range(3)
+    )
+
+
+def review_options(options, selected):
+    return "".join(
+        f'<option value="{esc(value)}"{" selected" if value == selected else ""}>'
+        f"{esc(text)}</option>"
+        for value, text in options
     )
 
 
@@ -278,9 +292,9 @@ def export_review(clips, output):
                 f"<p class=\"coverage\">trail interval: f{start_frame}-f{frame} "
                 f"({esc(interval_source)}); observed coverage: {tracked}/{total} frames ({coverage}%)</p>"
                 "<div class=\"label-controls\">"
-                f"<label>Label <select data-field=\"label\">{''.join(f'<option value=\"{esc(value)}\">{esc(text)}</option>' for value, text in REVIEW_LABELS)}</select></label>"
-                "<label>Confidence <select data-field=\"reviewer_confidence\"><option value=\"\">Choose confidence</option><option>high</option><option>medium</option><option>low</option></select></label>"
-                "<label>Note <input data-field=\"note\" type=\"text\" placeholder=\"optional source-video note\"></label>"
+                f"<label>Label <select data-field=\"label\">{review_options(REVIEW_LABELS, item.get('label', ''))}</select></label>"
+                f"<label>Confidence <select data-field=\"reviewer_confidence\">{review_options(REVIEW_CONFIDENCES, item.get('reviewer_confidence', ''))}</select></label>"
+                f"<label>Note <input data-field=\"note\" type=\"text\" value=\"{esc(item.get('note', ''))}\" placeholder=\"optional source-video note\"></label>"
                 "</div>"
                 "<figure class=\"trail\">"
                 f"<img src=\"{esc(rel)}\" alt=\"{esc(clip['label'])} tracked-ball trail ending at frame {frame}\">"

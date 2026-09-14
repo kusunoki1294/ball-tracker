@@ -42,6 +42,23 @@ def load_diagnostics(path):
     return {str(event["frame"]): event for event in data.get("events", [])}
 
 
+def load_labels(path):
+    if not path:
+        return {}
+    with open(path, newline="", encoding="utf-8") as handle:
+        rows = csv.DictReader(handle)
+        labels = {}
+        for row in rows:
+            frame = (row.get("frame") or "").strip()
+            if frame:
+                labels[frame] = {
+                    "label": row.get("label", ""),
+                    "reviewer_confidence": row.get("reviewer_confidence", ""),
+                    "note": row.get("note", ""),
+                }
+        return labels
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--video", required=True)
@@ -49,11 +66,15 @@ def main():
     parser.add_argument("--reviews", required=True)
     parser.add_argument("--diagnostics",
                         help="Optional review-only context JSON keyed by reversal frame.")
+    parser.add_argument("--labels",
+                        help="Optional previously exported review labels keyed by frame.")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     events = read_events(args.reviews)
     diagnostics = load_diagnostics(args.diagnostics)
+    labels = load_labels(args.labels)
     for event in events:
+        event.update(labels.get(str(event["frame"]), {}))
         context = diagnostics.get(str(event["frame"]))
         if not context:
             continue
