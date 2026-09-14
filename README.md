@@ -403,6 +403,14 @@ Example:
       --reviews yoloVids/outputs/tennis11/track_reversal_review.csv \
       --output yoloVids/outputs/tennis11/track_reversal_review.mp4
 
+    # Add the observed image-space ball trail before each reversal. Coast and
+    # interpolated positions are omitted, and coverage is printed on each card.
+    .venv/bin/python render_track_reversal_review.py \
+      --video yoloVids/inputs/tennis11_game1.mp4 \
+      --reviews yoloVids/outputs/tennis11/track_reversal_review.csv \
+      --tracking-jsonl yoloVids/outputs/tennis11/ai11.1.jsonl \
+      --output yoloVids/outputs/tennis11/tennis11_game1_bounce_evidence_trails.mp4
+
     # Optional combined audit: existing detector candidates plus candidate-free
     # reversal events, with the two evidence sources kept visually distinct.
     .venv/bin/python render_track_reversal_review.py \
