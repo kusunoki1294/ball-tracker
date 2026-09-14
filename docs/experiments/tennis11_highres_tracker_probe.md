@@ -40,3 +40,11 @@ A fourth targeted probe covered source frames 2070-2249 with `--imgsz 1280
 log already has nearby candidates at f2146, f2179, and f2253; no new verified
 bounce was recovered. Better tracking coverage in this window therefore did
 not translate into a demonstrated bounce-recall gain.
+
+A fifth targeted probe covered source frames 930-1109 with the same high-
+resolution and low-confidence settings. It tracked 169 of 180 frames with a
+ball and produced candidates at f967, f990, f1012, f1075, and f1101. These
+correspond to the existing baseline candidates at f967, f992, f1013, f1075,
+and f1103, with only small localization shifts; no candidate-free reversal was
+recovered. This far-court control likewise does not justify changing tracker
+defaults.
