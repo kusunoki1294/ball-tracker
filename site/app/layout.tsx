@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Baseline — Tennis video analysis",
+  title: "CourtLens — Tennis video analysis",
   description: "Send in your tennis match and get back a clear, human-reviewed analysis package.",
   icons: {
     icon: "/favicon.svg",

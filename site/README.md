@@ -1,4 +1,4 @@
-# Baseline Tennis
+# CourtLens
 
 Customer-facing upload site for the ball-tracker project. Players submit a match video and contact details; the video and its submission metadata are stored in a private Vercel Blob store for manual processing.
 

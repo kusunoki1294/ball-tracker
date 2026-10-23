@@ -1,5 +1,5 @@
 {
-  "name": "baseline-tennis",
+  "name": "courtlens",
   "version": "1.0.0",
   "private": true,
   "engines": { "node": ">=22.13.0" },
