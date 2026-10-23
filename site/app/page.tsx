@@ -8,8 +8,18 @@ const steps = [
 ];
 
 export default function Home() {
+  const structuredData = {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    name: "CourtLens",
+    alternateName: "CourtLens Tennis Video Analysis",
+    url: "https://courtlens.vercel.app/",
+    description: "Tennis video analysis with ball tracking, point timelines, and human-reviewed match statistics.",
+  };
+
   return (
     <main>
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }} />
       <nav className="nav shell"><a className="brand" href="#top" aria-label="CourtLens home"><span className="ball-mark" />COURTLENS</a><a className="nav-cta" href="#upload">Send a match <ArrowDown size={15} /></a></nav>
       <section className="hero shell" id="top">
         <div className="hero-copy"><p className="eyebrow">TENNIS VIDEO ANALYSIS / HUMAN REVIEWED</p><h1>See the match<br />you <em>actually</em> played.</h1><p className="lede">Upload your footage. We’ll track the ball, process the match and send back a clear analysis package built around your game.</p><div className="hero-actions"><a className="button primary" href="#upload">Upload your video <ArrowDown size={17} /></a><span>One match per submission<br />MP4, MOV or M4V</span></div></div>
