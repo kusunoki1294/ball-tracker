@@ -20,9 +20,9 @@ export default function Home() {
   return (
     <main>
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }} />
-      <nav className="nav shell"><a className="brand" href="#top" aria-label="CourtLens home"><span className="ball-mark" />COURTLENS</a><a className="nav-cta" href="#upload">Send a match <ArrowDown size={15} /></a></nav>
+      <nav className="nav shell"><a className="brand" href="#top" aria-label="CourtLens home"><span className="ball-mark" />COURTLENS <small className="demo-pill">DEMO</small></a><a className="nav-cta" href="#upload">View upload demo <ArrowDown size={15} /></a></nav>
       <section className="hero shell" id="top">
-        <div className="hero-copy"><p className="eyebrow">TENNIS VIDEO ANALYSIS / HUMAN REVIEWED</p><h1>See the match<br />you <em>actually</em> played.</h1><p className="lede">Upload your footage. We’ll track the ball, process the match and send back a clear analysis package built around your game.</p><div className="hero-actions"><a className="button primary" href="#upload">Upload your video <ArrowDown size={17} /></a><span>One match per submission<br />MP4, MOV or M4V</span></div></div>
+        <div className="hero-copy"><p className="eyebrow">PRODUCT DEMO / TENNIS VIDEO ANALYSIS</p><h1>See the match<br />you <em>actually</em> played.</h1><p className="lede">A preview of how CourtLens could turn match footage into ball tracking, timelines and clear statistics.</p><div className="hero-actions"><a className="button primary" href="#upload">Explore the demo <ArrowDown size={17} /></a><span>Concept experience<br />Uploads are disabled</span></div></div>
         <div className="court-card" aria-label="Stylized tennis court showing ball tracking"><div className="court-lines"><i /><b /><span /></div><div className="track-path"><span className="p1" /><span className="p2" /><span className="p3" /><span className="p4" /></div><div className="court-label"><ScanSearch size={18} /><span>Tracking frame by frame</span></div></div>
       </section>
       <section className="ticker" aria-label="Analysis outputs"><div>SHOT PLACEMENT <i /> BALL PATH <i /> POINT TIMELINE <i /> MATCH VIDEO <i /> HUMAN REVIEW <i /> SHOT PLACEMENT <i /> BALL PATH</div></section>
@@ -40,7 +40,7 @@ export default function Home() {
           </div>
         </div>
       </section>
-      <section className="upload-section" id="upload"><div className="shell upload-grid"><div className="upload-copy"><p className="eyebrow">SEND YOUR MATCH</p><h2>Ready when<br />you are.</h2><p>A stable, full-court view gives the tracker its best shot. Keep the whole court in frame and avoid moving the camera during play.</p><div className="privacy-note"><ChartNoAxesCombined size={20} /><span><strong>Your footage stays private.</strong><br />It is stored for analysis and isn’t published.</span></div></div><UploadForm /></div></section>
+      <section className="upload-section" id="upload"><div className="shell upload-grid"><div className="upload-copy"><p className="eyebrow">UPLOAD EXPERIENCE / DEMO</p><h2>See how it<br />would work.</h2><p>This is a non-functional preview of the CourtLens submission experience. No files or personal information can be submitted.</p><div className="privacy-note"><ChartNoAxesCombined size={20} /><span><strong>Demo mode is on.</strong><br />The form is disabled and nothing is uploaded or stored.</span></div></div><UploadForm /></div></section>
       <footer className="shell"><a className="brand" href="#top"><span className="ball-mark" />COURTLENS</a><p>Tennis analysis, one match at a time.</p><span>© {new Date().getFullYear()}</span></footer>
     </main>
   );
