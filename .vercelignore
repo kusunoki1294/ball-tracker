@@ -1,3 +1,6 @@
 *
 !site
 !site/**
+site/node_modules
+site/.next
+site/.env*
